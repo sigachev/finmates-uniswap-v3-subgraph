@@ -1,1 +1,2 @@
-# finmates-uniswap-v3-subgraph
+# Uniswap V3 Subgraph
+
