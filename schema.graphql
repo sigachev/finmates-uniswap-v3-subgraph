@@ -1,4 +1,4 @@
-type Factory @entity {
+type Factory @entity(immutable: false) {
   # factory address
   id: ID!
   # amount of pools created
@@ -29,13 +29,13 @@ type Factory @entity {
 }
 
 # stores for USD calculations
-type Bundle @entity {
+type Bundle @entity(immutable: false) {
   id: ID!
   # price of ETH in usd
   ethPriceUSD: BigDecimal!
 }
 
-type Token @entity {
+type Token @entity(immutable: false) {
   # token address
   id: ID!
   # token symbol
@@ -72,7 +72,7 @@ type Token @entity {
   tokenDayData: [TokenDayData!]! @derivedFrom(field: "token")
 }
 
-type Pool @entity {
+type Pool @entity(immutable: false) {
   # pool address
   id: ID!
   # creation
@@ -107,7 +107,7 @@ type Pool @entity {
   volumeToken1: BigDecimal!
   # all time USD swapped
   volumeUSD: BigDecimal!
-  # all time USD swapped, unfiltered for unreliable USD pools
+  # all time USD swapped, untracked
   untrackedVolumeUSD: BigDecimal!
   # fees in USD
   feesUSD: BigDecimal!
@@ -119,23 +119,21 @@ type Pool @entity {
   collectedFeesToken1: BigDecimal!
   # all time fees collected derived USD
   collectedFeesUSD: BigDecimal!
-  # total token 0 across all ticks
+  # total value locked token0
   totalValueLockedToken0: BigDecimal!
-  # total token 1 across all ticks
+  # total value locked token1
   totalValueLockedToken1: BigDecimal!
-  # tvl derived ETH
+  # total value locked derived ETH
   totalValueLockedETH: BigDecimal!
-  # tvl USD
+  # total value locked derived USD
   totalValueLockedUSD: BigDecimal!
-  # TVL derived in USD untracked
+  # total value locked untracked USD
   totalValueLockedUSDUntracked: BigDecimal!
+  # liquidity providers count
+  liquidityProviderCount: BigInt!
   # Fields used to help derived relationship
-  liquidityProviderCount: BigInt! # used to detect new exchanges
-  # hourly snapshots of pool data
   poolHourData: [PoolHourData!]! @derivedFrom(field: "pool")
-  # daily snapshots of pool data
   poolDayData: [PoolDayData!]! @derivedFrom(field: "pool")
-  # derived fields
   mints: [Mint!]! @derivedFrom(field: "pool")
   burns: [Burn!]! @derivedFrom(field: "pool")
   swaps: [Swap!]! @derivedFrom(field: "pool")
@@ -143,7 +141,7 @@ type Pool @entity {
   ticks: [Tick!]! @derivedFrom(field: "pool")
 }
 
-type Tick @entity {
+type Tick @entity(immutable: false) {
   # format: <pool address>#<tick index>
   id: ID!
   # pool address
@@ -189,7 +187,7 @@ type Tick @entity {
   feeGrowthOutside1X128: BigInt!
 }
 
-type Position @entity {
+type Position @entity(immutable: false) {
   # Positions created through NonfungiblePositionManager
   # NFT token id
   id: ID!
@@ -230,7 +228,7 @@ type Position @entity {
   feeGrowthInside1LastX128: BigInt!
 }
 
-type PositionSnapshot @entity {
+type PositionSnapshot @entity(immutable: true) {
   # <NFT token id>#<block number>
   id: ID!
   # owner of the NFT
@@ -264,15 +262,14 @@ type PositionSnapshot @entity {
   feeGrowthInside1LastX128: BigInt!
 }
 
-type Transaction @entity {
+type Transaction @entity(immutable: true) {
   # txn hash
   id: ID!
   # block txn was included in
   blockNumber: BigInt!
   # timestamp txn was confirmed
   timestamp: BigInt!
-  # gas used during txn execution
-  gasUsed: BigInt!
+  # gas price
   gasPrice: BigInt!
   # derived values
   mints: [Mint]! @derivedFrom(field: "transaction")
@@ -282,7 +279,7 @@ type Transaction @entity {
   collects: [Collect]! @derivedFrom(field: "transaction")
 }
 
-type Mint @entity {
+type Mint @entity(immutable: true) {
   # transaction hash + "#" + index in mints Transaction array
   id: ID!
   # which txn the mint was included in
@@ -317,7 +314,7 @@ type Mint @entity {
   logIndex: BigInt
 }
 
-type Burn @entity {
+type Burn @entity(immutable: true) {
   # transaction hash + "#" + index in mints Transaction array
   id: ID!
   # txn burn was included in
@@ -350,7 +347,7 @@ type Burn @entity {
   logIndex: BigInt
 }
 
-type Swap @entity {
+type Swap @entity(immutable: true) {
   # transaction hash + "#" + index in swaps Transaction array
   id: ID!
   # pointer to transaction
@@ -383,7 +380,7 @@ type Swap @entity {
   logIndex: BigInt
 }
 
-type Collect @entity {
+type Collect @entity(immutable: true) {
   # transaction hash + "#" + index in collect Transaction array
   id: ID!
   # pointer to txn
@@ -408,7 +405,7 @@ type Collect @entity {
   logIndex: BigInt
 }
 
-type Flash @entity {
+type Flash @entity(immutable: true) {
   # transaction hash + "-" + index in collect Transaction array
   id: ID!
   # pointer to txn
@@ -425,27 +422,27 @@ type Flash @entity {
   amount0: BigDecimal!
   # amount of token1 flashed
   amount1: BigDecimal!
-  # derived amount based on available prices of tokens
-  amountUSD: BigDecimal!
-  # amount token0 paid for flash
+  # amount paid for flash in token0
   amount0Paid: BigDecimal!
-  # amount token1 paid for flash
+  # amount paid for flash in token1
   amount1Paid: BigDecimal!
   # index within the txn
   logIndex: BigInt
+  # derived amount based on available prices of tokens
+  amountUSD: BigDecimal!
 }
 
 # Data accumulated and condensed into day stats for all of Uniswap
-type UniswapDayData @entity {
+type UniswapDayData @entity(immutable: false) {
   # timestamp rounded to current day by dividing by 86400
   id: ID!
   # timestamp rounded to current day by dividing by 86400
   date: Int!
-  # total daily volume in Uniswap derived in terms of ETH
+  # total daily volume in ETH derived in USD
   volumeETH: BigDecimal!
-  # total daily volume in Uniswap derived in terms of USD
+  # total daily volume in USD
   volumeUSD: BigDecimal!
-  # total daily volume in Uniswap derived in terms of USD untracked
+  # total daily volume in USD untracked
   volumeUSDUntracked: BigDecimal!
   # fees in USD
   feesUSD: BigDecimal!
@@ -456,7 +453,7 @@ type UniswapDayData @entity {
 }
 
 # Data accumulated and condensed into day stats for each pool
-type PoolDayData @entity {
+type PoolDayData @entity(immutable: false) {
   # timestamp rounded to current day by dividing by 86400
   id: ID!
   # timestamp rounded to current day by dividing by 86400
@@ -500,7 +497,7 @@ type PoolDayData @entity {
 }
 
 # hourly stats tracker for pool
-type PoolHourData @entity {
+type PoolHourData @entity(immutable: false) {
   # format: <pool address>-<timestamp>
   id: ID!
   # unix timestamp for start of hour
@@ -543,7 +540,7 @@ type PoolHourData @entity {
   close: BigDecimal!
 }
 
-type TickHourData @entity {
+type TickHourData @entity(immutable: false) {
   # format: <pool address>-<tick index>-<timestamp>
   id: ID!
   # unix timestamp for start of hour
@@ -568,7 +565,7 @@ type TickHourData @entity {
 
 # Data accumulated and condensed into day stats for each exchange
 # Note: this entity gets saved only if there is a change during the day
-type TickDayData @entity {
+type TickDayData @entity(immutable: false) {
   # format: <pool address>-<tick index>-<timestamp>
   id: ID!
   # timestamp rounded to current day by dividing by 86400
@@ -594,7 +591,7 @@ type TickDayData @entity {
   feeGrowthOutside1X128: BigInt!
 }
 
-type TokenDayData @entity {
+type TokenDayData @entity(immutable: false) {
   # token address concatendated with date
   id: ID!
   # timestamp rounded to current day by dividing by 86400
@@ -625,7 +622,7 @@ type TokenDayData @entity {
   close: BigDecimal!
 }
 
-type TokenHourData @entity {
+type TokenHourData @entity(immutable: false) {
   # token address concatendated with date
   id: ID!
   # unix timestamp for start of hour

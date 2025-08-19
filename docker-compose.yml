@@ -1,6 +1,7 @@
+version: '3'
 services:
   graph-node:
-    image: graphprotocol/graph-node
+    image: graphprotocol/graph-node:latest
     ports:
       - '8000:8000'
       - '8001:8001'
@@ -10,33 +11,47 @@ services:
     depends_on:
       - ipfs
       - postgres
+    restart: unless-stopped
     environment:
       postgres_host: postgres
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
-      # For Arbitrum mainnet, use:
-      ethereum: 'arbitrum:https://arb1.arbitrum.io/rpc'
-      # For local testing with Ganache, use:
-      # ethereum: 'mainnet:http://host.docker.internal:8545'
-      RUST_LOG: info
-      GRAPH_LOG: debug
+      ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
+      GRAPH_LOG: info
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
+      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
+    volumes:
+      - ./data:/data
+
   ipfs:
-    image: ipfs/go-ipfs:v0.4.23
+    image: ipfs/go-ipfs:v0.10.0
     ports:
-      - '5002:5001'  # Changed external port to 5002
+      - '5001:5001'
+    restart: unless-stopped
     volumes:
       - ./data/ipfs:/data/ipfs
+
   postgres:
-    image: postgres
+    image: postgres:14
     ports:
-      - '5433:5432'  # Changed external port to 5433
-    command: ["postgres", "-cshared_preload_libraries=pg_stat_statements"]
+      - '5432:5432'
+    restart: unless-stopped
     environment:
       POSTGRES_USER: graph-node
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      LANG: C
+      LC_ALL: C
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "max_connections=200"
