@@ -18,10 +18,20 @@ services:
       postgres_pass: let-me-in
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
+      # Use a reliable Arbitrum RPC endpoint
       ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
       GRAPH_LOG: info
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
+      # Performance tuning for sync
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '500'
+      GRAPH_ETHEREUM_REQUEST_RETRIES: '10'
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '50'
+      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '64'
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
+      GRAPH_GRAPHQL_MAX_FIRST: '5000'
+      GRAPH_GRAPHQL_MAX_SKIP: '5000'
+      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
     volumes:
       - ./data:/data
 
@@ -55,3 +65,19 @@ services:
       - "pg_stat_statements.track=all"
       - "-c"
       - "max_connections=200"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
