@@ -1,7 +1,8 @@
-version: '3'
+version: '3.8'
+
 services:
   graph-node:
-    image: graphprotocol/graph-node:latest
+    image: graphprotocol/graph-node:v0.35.1
     ports:
       - '8000:8000'
       - '8001:8001'
@@ -10,74 +11,72 @@ services:
       - '8040:8040'
     depends_on:
       - ipfs
-      - postgres
     restart: unless-stopped
     environment:
-      postgres_host: postgres
-      postgres_user: graph-node
-      postgres_pass: let-me-in
-      postgres_db: graph-node
+      # Remote PostgreSQL connection
+      postgres_host: finmates.com
+      postgres_port: 5432
+      postgres_user: user
+      postgres_pass: ${POSTGRES_PASSWORD}  # Set in .env file
+      postgres_db: stock-data  # or create a new database for graph-node
+
+      # IPFS configuration
       ipfs: 'ipfs:5001'
-      # Use a reliable Arbitrum RPC endpoint
-      ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
+
+      # Alchemy RPC endpoint
+      ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}'
+
+      # Graph Node settings
       GRAPH_LOG: info
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
-      # Performance tuning for sync
-      GRAPH_ETHEREUM_POLLING_INTERVAL: '500'
-      GRAPH_ETHEREUM_REQUEST_RETRIES: '10'
-      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '50'
-      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '64'
+
+      # Optimizations for Alchemy
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '1000'
+      GRAPH_ETHEREUM_REQUEST_RETRIES: '15'
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '10'
+      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '10'
       GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
-      GRAPH_GRAPHQL_MAX_FIRST: '5000'
-      GRAPH_GRAPHQL_MAX_SKIP: '5000'
+      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '60'
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '1000'
+      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '200000000'
+
+      # GraphQL settings
+      GRAPH_GRAPHQL_MAX_FIRST: '1000'
+      GRAPH_GRAPHQL_MAX_SKIP: '1000'
       GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
+
+      # PostgreSQL connection pool
+      GRAPH_STORE_CONNECTION_POOL_SIZE: '10'
+      DATABASE_URL: 'postgresql://user:${POSTGRES_PASSWORD}@finmates.com:5432/stock-data'
+
     volumes:
-      - ./data:/data
+      - ./data/graph-node:/data
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: '3'
+        reservations:
+          memory: 4G
+          cpus: '2'
 
   ipfs:
-    image: ipfs/go-ipfs:v0.10.0
+    image: ipfs/kubo:v0.24.0
     ports:
       - '5001:5001'
-    restart: unless-stopped
-    volumes:
-      - ./data/ipfs:/data/ipfs
-
-  postgres:
-    image: postgres:14
-    ports:
-      - '5432:5432'
+      - '8080:8080'
     restart: unless-stopped
     environment:
-      POSTGRES_USER: graph-node
-      POSTGRES_PASSWORD: let-me-in
-      POSTGRES_DB: graph-node
-      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-      LANG: C
-      LC_ALL: C
+      IPFS_PROFILE: server
+      IPFS_PATH: /data/ipfs
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-    command:
-      - "postgres"
-      - "-c"
-      - "shared_preload_libraries=pg_stat_statements"
-      - "-c"
-      - "pg_stat_statements.track=all"
-      - "-c"
-      - "max_connections=200"
-      - "-c"
-      - "shared_buffers=512MB"
-      - "-c"
-      - "effective_cache_size=2GB"
-      - "-c"
-      - "maintenance_work_mem=128MB"
-      - "-c"
-      - "checkpoint_completion_target=0.9"
-      - "-c"
-      - "wal_buffers=16MB"
-      - "-c"
-      - "default_statistics_target=100"
-      - "-c"
-      - "random_page_cost=1.1"
-      - "-c"
-      - "effective_io_concurrency=200"
+      - ./data/ipfs:/data/ipfs
+    command: ["daemon", "--migrate=true", "--enable-gc", "--routing=none"]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # No local postgres needed!
