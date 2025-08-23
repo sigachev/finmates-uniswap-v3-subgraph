@@ -1,68 +1,64 @@
 version: '3.8'
 
 services:
-  graph-node:
-    image: graphprotocol/graph-node:v0.35.1
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: postgres
     ports:
-      - '8000:8000'
-      - '8001:8001'
-      - '8020:8020'
-      - '8030:8030'
-      - '8040:8040'
-    depends_on:
-      - ipfs
+      - '5432:5432'
     restart: unless-stopped
     environment:
-      # Remote PostgreSQL connection
-      postgres_host: finmates.com
-      postgres_port: 5432
-      postgres_user: user
-      postgres_pass: ${POSTGRES_PASSWORD}  # Set in .env file
-      postgres_db: stock-data  # or create a new database for graph-node
-
-      # IPFS configuration
-      ipfs: 'ipfs:5001'
-
-      # Alchemy RPC endpoint
-      ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}'
-
-      # Graph Node settings
-      GRAPH_LOG: info
-      GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
-      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
-
-      # Optimizations for Alchemy
-      GRAPH_ETHEREUM_POLLING_INTERVAL: '1000'
-      GRAPH_ETHEREUM_REQUEST_RETRIES: '15'
-      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '10'
-      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '10'
-      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
-      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '60'
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '1000'
-      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '200000000'
-
-      # GraphQL settings
-      GRAPH_GRAPHQL_MAX_FIRST: '1000'
-      GRAPH_GRAPHQL_MAX_SKIP: '1000'
-      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
-
-      # PostgreSQL connection pool
-      GRAPH_STORE_CONNECTION_POOL_SIZE: '10'
-      DATABASE_URL: 'postgresql://user:${POSTGRES_PASSWORD}@finmates.com:5432/stock-data'
-
+      POSTGRES_USER: graph-node
+      POSTGRES_PASSWORD: let-me-in
+      POSTGRES_DB: graph-node
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      LANG: C
+      LC_ALL: C
     volumes:
-      - ./data/graph-node:/data
-    deploy:
-      resources:
-        limits:
-          memory: 6G
-          cpus: '3'
-        reservations:
-          memory: 4G
-          cpus: '2'
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graph-node"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - graph-network
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "min_wal_size=512MB"
+      - "-c"
+      - "max_wal_size=2GB"
 
+  # IPFS Node
   ipfs:
-    image: ipfs/kubo:v0.24.0
+    image: ipfs/go-ipfs:v0.10.0
+    container_name: ipfs
     ports:
       - '5001:5001'
       - '8080:8080'
@@ -72,11 +68,139 @@ services:
       IPFS_PATH: /data/ipfs
     volumes:
       - ./data/ipfs:/data/ipfs
-    command: ["daemon", "--migrate=true", "--enable-gc", "--routing=none"]
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '0.5'
+    healthcheck:
+      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+    networks:
+      - graph-network
+    command: |
+      sh -c '
+        if [ ! -f /data/ipfs/config ]; then
+          echo "Initializing IPFS..."
+          ipfs init --profile server
+          ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+          ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+          ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin "[\"*\"]"
+          ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods "[\"PUT\", \"POST\", \"GET\"]"
+          ipfs config --json Swarm.ConnMgr.LowWater 10
+          ipfs config --json Swarm.ConnMgr.HighWater 20
+        fi
+        echo "Starting IPFS daemon..."
+        exec ipfs daemon --enable-gc --routing=none
+      '
 
-  # No local postgres needed!
+  # Graph Node
+  graph-node:
+    image: graphprotocol/graph-node:v0.35.1
+    container_name: graph-node
+    ports:
+      - '8000:8000'
+      - '8001:8001'
+      - '8020:8020'
+      - '8030:8030'
+      - '8040:8040'
+    depends_on:
+      ipfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      # PostgreSQL configuration
+      postgres_host: postgres
+      postgres_user: graph-node
+      postgres_pass: let-me-in
+      postgres_db: graph-node
+
+      # IPFS configuration
+      ipfs: 'ipfs:5001'
+
+      # Ethereum endpoint - Using Alchemy
+      ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}'
+
+      # Graph Node configuration
+      GRAPH_LOG: info
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
+      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
+
+      # Optimized for Alchemy Free Tier
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '1000'
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '10'
+      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '10'
+      GRAPH_ETHEREUM_REQUEST_RETRIES: '15'
+      GRAPH_ETHEREUM_RETRY_JITTER_BASE: '100'
+      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '60'
+      GRAPH_ETHEREUM_REQUEST_TIMEOUT: '120'
+      GRAPH_ETHEREUM_CONNECTION_TIMEOUT: '30'
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '1000'
+      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '500'
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
+      GRAPH_ETHEREUM_BLOCK_STREAM_BUFFER_SIZE: '10000'
+      GRAPH_ETHEREUM_CACHE_SUBGRAPH_BLOCKS: 'true'
+      GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: 'true'
+      GRAPH_ETHEREUM_BLOCK_INGESTOR_MAX_CONCURRENT_JSON_RPC_CALLS_FOR_TXN_RECEIPTS: '100'
+      GRAPH_ETHEREUM_PROVIDER_SLEEP_ON_RATE_LIMIT_ERRORS: '5000'
+      GRAPH_ETHEREUM_PROVIDER_RATE_LIMIT_BACKOFF_EXPONENT: '2'
+      GRAPH_ETHEREUM_PROVIDER_MAX_RATE_LIMIT_RETRIES: '10'
+      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '200000000'
+      GRAPH_GRAPHQL_MAX_FIRST: '1000'
+      GRAPH_GRAPHQL_MAX_SKIP: '1000'
+      GRAPH_GRAPHQL_QUERY_TIMEOUT: '120'
+      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
+      GRAPH_STORE_CONNECTION_POOL_SIZE: '10'
+      GRAPH_POSTGRES_STATEMENT_TIMEOUT: '300s'
+      GRAPH_LOG_QUERY_TIMING: 'gql'
+
+      # Wait for services to be ready
+      GRAPH_NODE_STARTUP_TIMEOUT: '300'
+
+    volumes:
+      - ./data/graph-node:/data
+    networks:
+      - graph-network
+    entrypoint: |
+      sh -c '
+        echo "Waiting for IPFS at ipfs:5001..."
+        timeout=60
+        while [ $timeout -gt 0 ]; do
+          if nc -z ipfs 5001 2>/dev/null; then
+            echo "IPFS is ready!"
+            break
+          fi
+          echo "Waiting for IPFS... ($timeout seconds left)"
+          sleep 5
+          timeout=$((timeout - 5))
+        done
+      
+        if [ $timeout -eq 0 ]; then
+          echo "ERROR: IPFS did not start in time"
+          exit 1
+        fi
+      
+        echo "Waiting for PostgreSQL at postgres:5432..."
+        timeout=60
+        while [ $timeout -gt 0 ]; do
+          if nc -z postgres 5432 2>/dev/null; then
+            echo "PostgreSQL is ready!"
+            break
+          fi
+          echo "Waiting for PostgreSQL... ($timeout seconds left)"
+          sleep 5
+          timeout=$((timeout - 5))
+        done
+      
+        if [ $timeout -eq 0 ]; then
+          echo "ERROR: PostgreSQL did not start in time"
+          exit 1
+        fi
+      
+        echo "All dependencies are ready. Starting Graph Node..."
+        exec graph-node
+      '
+
+networks:
+  graph-network:
+    driver: bridge
