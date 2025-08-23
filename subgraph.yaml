@@ -13,7 +13,7 @@ dataSources:
       address: '0x1F98431c8aD98523631AE4a59f267346ea31F984'
       abi: Factory
       # Start from a more recent block to catch up faster
-      startBlock: 371000000
+      startBlock: 175
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -43,7 +43,7 @@ dataSources:
       address: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
       abi: NonfungiblePositionManager
       # Match the Factory start block
-      startBlock: 371000000
+      startBlock: 175
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
