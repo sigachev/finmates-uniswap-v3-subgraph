@@ -1,13 +1,11 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:14-alpine
     container_name: postgres
     ports:
       - '5432:5432'
-    restart: unless-stopped
     environment:
       POSTGRES_USER: graph-node
       POSTGRES_PASSWORD: let-me-in
@@ -18,12 +16,10 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U graph-node"]
+      test: ["CMD-SHELL", "pg_isready -U graph-node -d graph-node"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - graph-network
     command:
       - "postgres"
       - "-c"
@@ -31,7 +27,7 @@ services:
       - "-c"
       - "pg_stat_statements.track=all"
       - "-c"
-      - "max_connections=100"
+      - "max_connections=200"
       - "-c"
       - "shared_buffers=512MB"
       - "-c"
@@ -55,44 +51,64 @@ services:
       - "-c"
       - "max_wal_size=2GB"
 
-  # IPFS Node
   ipfs:
     image: ipfs/go-ipfs:v0.10.0
     container_name: ipfs
     ports:
       - '5001:5001'
       - '8080:8080'
-    restart: unless-stopped
     environment:
       IPFS_PROFILE: server
       IPFS_PATH: /data/ipfs
     volumes:
       - ./data/ipfs:/data/ipfs
     healthcheck:
-      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      test: ["CMD", "ipfs", "dag", "stat", "/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 5s
-    networks:
-      - graph-network
-    command: |
-      sh -c '
-        if [ ! -f /data/ipfs/config ]; then
-          echo "Initializing IPFS..."
-          ipfs init --profile server
-          ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
-          ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
-          ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin "[\"*\"]"
-          ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods "[\"PUT\", \"POST\", \"GET\"]"
-          ipfs config --json Swarm.ConnMgr.LowWater 10
-          ipfs config --json Swarm.ConnMgr.HighWater 20
-        fi
-        echo "Starting IPFS daemon..."
-        exec ipfs daemon --enable-gc --routing=none
-      '
+      start_period: 40s
 
-  # Graph Node
+  # Database initialization service
+  db-init:
+    image: postgres:14-alpine
+    container_name: db-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: let-me-in
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for PostgreSQL to be ready..."
+        until pg_isready -h postgres -U graph-node; do
+          sleep 2
+        done
+        
+        echo "Initializing database for Graph Node..."
+        
+        # Create extensions
+        psql -h postgres -U graph-node -d graph-node <<-EOSQL || true
+          -- Create necessary extensions for Graph Node
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE EXTENSION IF NOT EXISTS pg_trgm;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+        
+          -- Create a marker table to track initialization
+          CREATE TABLE IF NOT EXISTS graph_node_init (
+              id SERIAL PRIMARY KEY,
+              initialized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+        
+          -- Record initialization
+          INSERT INTO graph_node_init (initialized_at) VALUES (NOW());
+        EOSQL
+        
+        echo "Database initialization complete!"
+    restart: "no"
+
   graph-node:
     image: graphprotocol/graph-node:v0.35.1
     container_name: graph-node
@@ -107,18 +123,19 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+      db-init:
+        condition: service_completed_successfully
     environment:
-      # PostgreSQL configuration
+      # PostgreSQL connection
       postgres_host: postgres
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
 
-      # IPFS configuration
+      # IPFS connection
       ipfs: 'ipfs:5001'
 
-      # Ethereum endpoint - Using Alchemy
+      # Ethereum endpoint with Alchemy
       ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}'
 
       # Graph Node configuration
@@ -126,81 +143,43 @@ services:
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
 
-      # Optimized for Alchemy Free Tier
-      GRAPH_ETHEREUM_POLLING_INTERVAL: '1000'
-      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '10'
-      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '10'
-      GRAPH_ETHEREUM_REQUEST_RETRIES: '15'
-      GRAPH_ETHEREUM_RETRY_JITTER_BASE: '100'
-      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '60'
-      GRAPH_ETHEREUM_REQUEST_TIMEOUT: '120'
-      GRAPH_ETHEREUM_CONNECTION_TIMEOUT: '30'
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '1000'
-      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '500'
-      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
+      # Start from recent block (1 week ago)
+      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '371000000'
+
+      # === OPTIMIZED FOR ALCHEMY FREE TIER ===
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '2000'        # 2 seconds between polls
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '5'           # Very small batches
+      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '5'  # Limited parallel requests
+      GRAPH_ETHEREUM_REQUEST_RETRIES: '20'
+      GRAPH_ETHEREUM_RETRY_JITTER_BASE: '500'
+      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '120'
+      GRAPH_ETHEREUM_REQUEST_TIMEOUT: '180'
+      GRAPH_ETHEREUM_CONNECTION_TIMEOUT: '60'
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '500'
+      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '250'
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '25'
       GRAPH_ETHEREUM_BLOCK_STREAM_BUFFER_SIZE: '10000'
       GRAPH_ETHEREUM_CACHE_SUBGRAPH_BLOCKS: 'true'
       GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: 'true'
-      GRAPH_ETHEREUM_BLOCK_INGESTOR_MAX_CONCURRENT_JSON_RPC_CALLS_FOR_TXN_RECEIPTS: '100'
-      GRAPH_ETHEREUM_PROVIDER_SLEEP_ON_RATE_LIMIT_ERRORS: '5000'
+      GRAPH_ETHEREUM_PROVIDER_SLEEP_ON_RATE_LIMIT_ERRORS: '10000'
       GRAPH_ETHEREUM_PROVIDER_RATE_LIMIT_BACKOFF_EXPONENT: '2'
-      GRAPH_ETHEREUM_PROVIDER_MAX_RATE_LIMIT_RETRIES: '10'
-      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '200000000'
+      GRAPH_ETHEREUM_PROVIDER_MAX_RATE_LIMIT_RETRIES: '15'
+
+      # GraphQL settings
       GRAPH_GRAPHQL_MAX_FIRST: '1000'
       GRAPH_GRAPHQL_MAX_SKIP: '1000'
       GRAPH_GRAPHQL_QUERY_TIMEOUT: '120'
       GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
+
+      # Database settings
       GRAPH_STORE_CONNECTION_POOL_SIZE: '10'
       GRAPH_POSTGRES_STATEMENT_TIMEOUT: '300s'
       GRAPH_LOG_QUERY_TIMING: 'gql'
 
-      # Wait for services to be ready
-      GRAPH_NODE_STARTUP_TIMEOUT: '300'
-
+    restart: unless-stopped
     volumes:
       - ./data/graph-node:/data
-    networks:
-      - graph-network
-    entrypoint: |
-      sh -c '
-        echo "Waiting for IPFS at ipfs:5001..."
-        timeout=60
-        while [ $timeout -gt 0 ]; do
-          if nc -z ipfs 5001 2>/dev/null; then
-            echo "IPFS is ready!"
-            break
-          fi
-          echo "Waiting for IPFS... ($timeout seconds left)"
-          sleep 5
-          timeout=$((timeout - 5))
-        done
-      
-        if [ $timeout -eq 0 ]; then
-          echo "ERROR: IPFS did not start in time"
-          exit 1
-        fi
-      
-        echo "Waiting for PostgreSQL at postgres:5432..."
-        timeout=60
-        while [ $timeout -gt 0 ]; do
-          if nc -z postgres 5432 2>/dev/null; then
-            echo "PostgreSQL is ready!"
-            break
-          fi
-          echo "Waiting for PostgreSQL... ($timeout seconds left)"
-          sleep 5
-          timeout=$((timeout - 5))
-        done
-      
-        if [ $timeout -eq 0 ]; then
-          echo "ERROR: PostgreSQL did not start in time"
-          exit 1
-        fi
-      
-        echo "All dependencies are ready. Starting Graph Node..."
-        exec graph-node
-      '
 
 networks:
-  graph-network:
-    driver: bridge
+  default:
+    name: graph-network
