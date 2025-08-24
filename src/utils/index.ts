@@ -13,7 +13,7 @@ export function exponentToBigDecimal(decimals: BigInt): BigDecimal {
 
 // return 0 if denominator is 0 in division
 export function safeDiv(amount0: BigDecimal, amount1: BigDecimal): BigDecimal {
-  if (amount1.equals(ZERO_BD)) {
+  if (amount1.equals(ZERO_BD) || amount1.toString() == '0') {
     return ZERO_BD
   } else {
     return amount0.div(amount1)

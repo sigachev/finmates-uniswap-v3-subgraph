@@ -22,6 +22,24 @@ import {
 } from '../utils/intervalUpdates'
 import { createTick, feeTierToTickSpacing } from '../utils/tick'
 
+// Helper function to ensure bundle exists and has a valid ETH price
+function ensureBundleExists(): Bundle {
+  let bundle = Bundle.load('1')
+  if (bundle === null) {
+    bundle = new Bundle('1')
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
+    bundle.save()
+  }
+
+  // If ETH price is still zero, update it
+  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
+    bundle.ethPriceUSD = getEthPriceInUSD()
+    bundle.save()
+  }
+
+  return bundle as Bundle
+}
+
 export function handleInitialize(event: Initialize): void {
   let pool = Pool.load(event.address.toHexString())
   if (pool === null) {
@@ -37,12 +55,12 @@ export function handleInitialize(event: Initialize): void {
 }
 
 export function handleMint(event: MintEvent): void {
-  let bundle = Bundle.load('1')
+  let bundle = ensureBundleExists()
   let poolAddress = event.address.toHexString()
   let pool = Pool.load(poolAddress)
   let factory = Factory.load(FACTORY_ADDRESS)
 
-  if (!bundle || !pool || !factory) {
+  if (!pool || !factory) {
     log.error('Missing required entities in handleMint', [])
     return
   }
@@ -167,12 +185,12 @@ export function handleMint(event: MintEvent): void {
 }
 
 export function handleBurn(event: BurnEvent): void {
-  let bundle = Bundle.load('1')
+  let bundle = ensureBundleExists()
   let poolAddress = event.address.toHexString()
   let pool = Pool.load(poolAddress)
   let factory = Factory.load(FACTORY_ADDRESS)
 
-  if (!bundle || !pool || !factory) {
+  if (!pool || !factory) {
     log.error('Missing required entities in handleBurn', [])
     return
   }
@@ -284,14 +302,14 @@ export function handleBurn(event: BurnEvent): void {
 }
 
 export function handleSwap(event: SwapEvent): void {
-  let bundle = Bundle.load('1')
+  let bundle = ensureBundleExists()
   let factory = Factory.load(FACTORY_ADDRESS)
   let pool = Pool.load(event.address.toHexString())
 
   // Early return if critical entities are missing
-  if (!bundle || !factory || !pool) {
+  if (!factory || !pool) {
     log.error('Missing required entities - bundle: {}, factory: {}, pool: {}', [
-      bundle ? 'exists' : 'null',
+      'exists',
       factory ? 'exists' : 'null',
       pool ? 'exists' : 'null'
     ])
@@ -336,7 +354,9 @@ export function handleSwap(event: SwapEvent): void {
   let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
     BigDecimal.fromString('2')
   )
-  let amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
+  let amountTotalETHTracked = bundle.ethPriceUSD.gt(ZERO_BD)
+    ? safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
+    : ZERO_BD
   let amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
 
   let feesETH = amountTotalETHTracked.times(pool.feeTier.toBigDecimal()).div(BigDecimal.fromString('1000000'))
