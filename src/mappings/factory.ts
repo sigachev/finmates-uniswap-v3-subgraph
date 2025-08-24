@@ -6,7 +6,7 @@ import { PoolCreated } from '../types/Factory/Factory'
 import { Pool, Token, Bundle } from '../types/schema'
 import { Pool as PoolTemplate } from '../types/templates'
 import { fetchTokenSymbol, fetchTokenName, fetchTokenTotalSupply, fetchTokenDecimals } from '../utils/token'
-import { log, BigInt, Address } from '@graphprotocol/graph-ts'
+import { log, BigInt, Address, BigDecimal } from '@graphprotocol/graph-ts'
 
 // Initialize or load bundle
 function getOrCreateBundle(): Bundle {
