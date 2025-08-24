@@ -13,9 +13,16 @@ function getOrCreateBundle(): Bundle {
   let bundle = Bundle.load('1')
   if (bundle === null) {
     bundle = new Bundle('1')
-    bundle.ethPriceUSD = ZERO_BD
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
     bundle.save()
   }
+
+  // Always ensure we have a valid ETH price
+  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    bundle.save()
+  }
+
   return bundle as Bundle
 }
 

@@ -37,10 +37,15 @@ export function getEthPriceInUSD(): BigDecimal {
   // fetch eth prices for each stablecoin
   let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
 
-  if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI)) {
-    // Check if we have a valid price
-    if (usdcPool.token1Price.gt(ZERO_BD)) {
-      return usdcPool.token1Price
+  if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
+    let token0 = Token.load(usdcPool.token0)
+    let token1 = Token.load(usdcPool.token1)
+    if (token0 && token1) {
+      let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0 as Token, token1 as Token)
+      // USDC is token1, so we want token1Price which is ETH/USDC
+      if (prices[1].gt(ZERO_BD)) {
+        return prices[1]
+      }
     }
   }
 

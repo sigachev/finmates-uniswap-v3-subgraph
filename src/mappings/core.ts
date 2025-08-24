@@ -31,9 +31,9 @@ function ensureBundleExists(): Bundle {
     bundle.save()
   }
 
-  // If ETH price is still zero, update it
-  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
-    bundle.ethPriceUSD = getEthPriceInUSD()
+  // Always ensure we have a valid ETH price - never let it be zero
+  if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000')
     bundle.save()
   }
 
@@ -354,9 +354,13 @@ export function handleSwap(event: SwapEvent): void {
   let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
     BigDecimal.fromString('2')
   )
-  let amountTotalETHTracked = bundle.ethPriceUSD.gt(ZERO_BD)
-    ? safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
-    : ZERO_BD
+  // Ensure we have a valid ETH price before calculating ETH tracked amount
+  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
+    bundle.save()
+  }
+
+  let amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
   let amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
 
   let feesETH = amountTotalETHTracked.times(pool.feeTier.toBigDecimal()).div(BigDecimal.fromString('1000000'))
