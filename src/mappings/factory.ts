@@ -8,6 +8,17 @@ import { Pool as PoolTemplate } from '../types/templates'
 import { fetchTokenSymbol, fetchTokenName, fetchTokenTotalSupply, fetchTokenDecimals } from '../utils/token'
 import { log, BigInt, Address } from '@graphprotocol/graph-ts'
 
+// Initialize or load bundle
+function getOrCreateBundle(): Bundle {
+  let bundle = Bundle.load('1')
+  if (bundle === null) {
+    bundle = new Bundle('1')
+    bundle.ethPriceUSD = ZERO_BD
+    bundle.save()
+  }
+  return bundle as Bundle
+}
+
 export function handlePoolCreated(event: PoolCreated): void {
   // temp fix
   if (event.params.pool == Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248')) {
@@ -30,12 +41,10 @@ export function handlePoolCreated(event: PoolCreated): void {
     factory.totalValueLockedETHUntracked = ZERO_BD
     factory.txCount = ZERO_BI
     factory.owner = ADDRESS_ZERO
-
-    // create new bundle for tracking eth price
-    let bundle = new Bundle('1')
-    bundle.ethPriceUSD = ZERO_BD
-    bundle.save()
   }
+
+  // Ensure bundle exists
+  getOrCreateBundle()
 
   factory.poolCount = factory.poolCount.plus(ONE_BI)
 
