@@ -1,7 +1,7 @@
 /* eslint-disable prefer-const */
 import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token } from '../types/schema'
 import { Pool as PoolABI } from '../types/Factory/Pool'
-import { BigDecimal, BigInt, ethereum } from '@graphprotocol/graph-ts'
+import { BigDecimal, BigInt, ethereum, log } from '@graphprotocol/graph-ts'
 import {
   Burn as BurnEvent,
   Flash as FlashEvent,
@@ -24,23 +24,13 @@ import { createTick, feeTierToTickSpacing } from '../utils/tick'
 
 export function handleInitialize(event: Initialize): void {
   let pool = Pool.load(event.address.toHexString())
-  if (pool == null) {
+  if (pool === null) {
+    log.error('Pool not found in handleInitialize: {}', [event.address.toHexString()])
     return
   }
-
   pool.sqrtPrice = event.params.sqrtPriceX96
   pool.tick = BigInt.fromI32(event.params.tick)
   pool.save()
-
-  // update token prices
-  let token0 = Token.load(pool.token0)
-  let token1 = Token.load(pool.token1)
-  if (token0 != null && token1 != null) {
-    let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
-    pool.token0Price = prices[0]
-    pool.token1Price = prices[1]
-    pool.save()
-  }
 
   updatePoolDayData(event)
   updatePoolHourData(event)
@@ -48,26 +38,20 @@ export function handleInitialize(event: Initialize): void {
 
 export function handleMint(event: MintEvent): void {
   let bundle = Bundle.load('1')
-  if (bundle == null) {
-    bundle = new Bundle('1')
-    bundle.ethPriceUSD = ZERO_BD
-    bundle.save()
-  }
-
   let poolAddress = event.address.toHexString()
   let pool = Pool.load(poolAddress)
-  if (pool == null) {
-    return
-  }
-
   let factory = Factory.load(FACTORY_ADDRESS)
-  if (factory == null) {
+
+  if (!bundle || !pool || !factory) {
+    log.error('Missing required entities in handleMint', [])
     return
   }
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
-  if (token0 == null || token1 == null) {
+
+  if (!token0 || !token1) {
+    log.error('Missing tokens in handleMint for pool {}', [poolAddress])
     return
   }
 
@@ -75,8 +59,8 @@ export function handleMint(event: MintEvent): void {
   let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
 
   let amountUSD = amount0
-      .times(token0.derivedETH.times(bundle.ethPriceUSD))
-      .plus(amount1.times(token1.derivedETH.times(bundle.ethPriceUSD)))
+    .times(token0.derivedETH.times(bundle.ethPriceUSD))
+    .plus(amount1.times(token1.derivedETH.times(bundle.ethPriceUSD)))
 
   // reset tvl aggregates until new amounts calculated
   factory.totalValueLockedETH = factory.totalValueLockedETH.minus(pool.totalValueLockedETH)
@@ -100,9 +84,9 @@ export function handleMint(event: MintEvent): void {
   // Pools liquidity tracks the currently active liquidity given pools current tick.
   // We only want to update it on mint if the new position includes the current tick.
   if (
-      pool.tick !== null &&
-      BigInt.fromI32(event.params.tickLower).le(pool.tick as BigInt) &&
-      BigInt.fromI32(event.params.tickUpper).gt(pool.tick as BigInt)
+    pool.tick !== null &&
+    BigInt.fromI32(event.params.tickLower).le(pool.tick as BigInt) &&
+    BigInt.fromI32(event.params.tickUpper).gt(pool.tick as BigInt)
   ) {
     pool.liquidity = pool.liquidity.plus(event.params.amount)
   }
@@ -110,8 +94,8 @@ export function handleMint(event: MintEvent): void {
   pool.totalValueLockedToken0 = pool.totalValueLockedToken0.plus(amount0)
   pool.totalValueLockedToken1 = pool.totalValueLockedToken1.plus(amount1)
   pool.totalValueLockedETH = pool.totalValueLockedToken0
-      .times(token0.derivedETH)
-      .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
+    .times(token0.derivedETH)
+    .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
   pool.totalValueLockedUSD = pool.totalValueLockedETH.times(bundle.ethPriceUSD)
 
   // reset aggregates with new amounts
@@ -178,32 +162,26 @@ export function handleMint(event: MintEvent): void {
   mint.save()
 
   // Update inner tick vars and save the ticks
-  updateTickFeeVarsAndSave(lowerTick!, event)
-  updateTickFeeVarsAndSave(upperTick!, event)
+  updateTickFeeVarsAndSave(lowerTick, event)
+  updateTickFeeVarsAndSave(upperTick, event)
 }
 
 export function handleBurn(event: BurnEvent): void {
   let bundle = Bundle.load('1')
-  if (bundle == null) {
-    bundle = new Bundle('1')
-    bundle.ethPriceUSD = ZERO_BD
-    bundle.save()
-  }
-
   let poolAddress = event.address.toHexString()
   let pool = Pool.load(poolAddress)
-  if (pool == null) {
-    return
-  }
-
   let factory = Factory.load(FACTORY_ADDRESS)
-  if (factory == null) {
+
+  if (!bundle || !pool || !factory) {
+    log.error('Missing required entities in handleBurn', [])
     return
   }
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
-  if (token0 == null || token1 == null) {
+
+  if (!token0 || !token1) {
+    log.error('Missing tokens in handleBurn for pool {}', [poolAddress])
     return
   }
 
@@ -211,8 +189,8 @@ export function handleBurn(event: BurnEvent): void {
   let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
 
   let amountUSD = amount0
-      .times(token0.derivedETH.times(bundle.ethPriceUSD))
-      .plus(amount1.times(token1.derivedETH.times(bundle.ethPriceUSD)))
+    .times(token0.derivedETH.times(bundle.ethPriceUSD))
+    .plus(amount1.times(token1.derivedETH.times(bundle.ethPriceUSD)))
 
   // reset tvl aggregates until new amounts calculated
   factory.totalValueLockedETH = factory.totalValueLockedETH.minus(pool.totalValueLockedETH)
@@ -235,9 +213,9 @@ export function handleBurn(event: BurnEvent): void {
   // Pools liquidity tracks the currently active liquidity given pools current tick.
   // We only want to update it on burn if the position being burnt includes the current tick.
   if (
-      pool.tick !== null &&
-      BigInt.fromI32(event.params.tickLower).le(pool.tick as BigInt) &&
-      BigInt.fromI32(event.params.tickUpper).gt(pool.tick as BigInt)
+    pool.tick !== null &&
+    BigInt.fromI32(event.params.tickLower).le(pool.tick as BigInt) &&
+    BigInt.fromI32(event.params.tickUpper).gt(pool.tick as BigInt)
   ) {
     pool.liquidity = pool.liquidity.minus(event.params.amount)
   }
@@ -245,8 +223,8 @@ export function handleBurn(event: BurnEvent): void {
   pool.totalValueLockedToken0 = pool.totalValueLockedToken0.minus(amount0)
   pool.totalValueLockedToken1 = pool.totalValueLockedToken1.minus(amount1)
   pool.totalValueLockedETH = pool.totalValueLockedToken0
-      .times(token0.derivedETH)
-      .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
+    .times(token0.derivedETH)
+    .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
   pool.totalValueLockedUSD = pool.totalValueLockedETH.times(bundle.ethPriceUSD)
 
   // reset aggregates with new amounts
@@ -277,16 +255,16 @@ export function handleBurn(event: BurnEvent): void {
   let lowerTick = Tick.load(lowerTickId)
   let upperTick = Tick.load(upperTickId)
 
-  if (lowerTick != null && upperTick != null) {
-    let amount = event.params.amount
-    lowerTick.liquidityGross = lowerTick.liquidityGross.minus(amount)
-    lowerTick.liquidityNet = lowerTick.liquidityNet.minus(amount)
-    upperTick.liquidityGross = upperTick.liquidityGross.minus(amount)
-    upperTick.liquidityNet = upperTick.liquidityNet.plus(amount)
-
-    updateTickFeeVarsAndSave(lowerTick!, event)
-    updateTickFeeVarsAndSave(upperTick!, event)
+  if (!lowerTick || !upperTick) {
+    log.error('Missing ticks in handleBurn for pool {}', [poolAddress])
+    return
   }
+
+  let amount = event.params.amount
+  lowerTick.liquidityGross = lowerTick.liquidityGross.minus(amount)
+  lowerTick.liquidityNet = lowerTick.liquidityNet.minus(amount)
+  upperTick.liquidityGross = upperTick.liquidityGross.minus(amount)
+  upperTick.liquidityNet = upperTick.liquidityNet.plus(amount)
 
   updateUniswapDayData(event)
   updatePoolDayData(event)
@@ -295,6 +273,8 @@ export function handleBurn(event: BurnEvent): void {
   updateTokenDayData(token1 as Token, event)
   updateTokenHourData(token0 as Token, event)
   updateTokenHourData(token1 as Token, event)
+  updateTickFeeVarsAndSave(lowerTick, event)
+  updateTickFeeVarsAndSave(upperTick, event)
 
   token0.save()
   token1.save()
@@ -305,19 +285,16 @@ export function handleBurn(event: BurnEvent): void {
 
 export function handleSwap(event: SwapEvent): void {
   let bundle = Bundle.load('1')
-  if (bundle == null) {
-    bundle = new Bundle('1')
-    bundle.ethPriceUSD = ZERO_BD
-    bundle.save()
-  }
-
   let factory = Factory.load(FACTORY_ADDRESS)
-  if (factory == null) {
-    return
-  }
-
   let pool = Pool.load(event.address.toHexString())
-  if (pool == null) {
+
+  // Early return if critical entities are missing
+  if (!bundle || !factory || !pool) {
+    log.error('Missing required entities - bundle: {}, factory: {}, pool: {}', [
+      bundle ? 'exists' : 'null',
+      factory ? 'exists' : 'null',
+      pool ? 'exists' : 'null'
+    ])
     return
   }
 
@@ -328,7 +305,9 @@ export function handleSwap(event: SwapEvent): void {
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
-  if (token0 == null || token1 == null) {
+
+  if (!token0 || !token1) {
+    log.error('Missing tokens in handleSwap for pool {}', [pool.id])
     return
   }
 
@@ -355,7 +334,7 @@ export function handleSwap(event: SwapEvent): void {
 
   // get amount that should be tracked only - div 2 because cant count both input and output as volume
   let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
-      BigDecimal.fromString('2')
+    BigDecimal.fromString('2')
   )
   let amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
   let amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
@@ -422,8 +401,8 @@ export function handleSwap(event: SwapEvent): void {
    * Things affected by new USD rates
    */
   pool.totalValueLockedETH = pool.totalValueLockedToken0
-      .times(token0.derivedETH)
-      .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
+    .times(token0.derivedETH)
+    .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
   pool.totalValueLockedUSD = pool.totalValueLockedETH.times(bundle.ethPriceUSD)
 
   factory.totalValueLockedETH = factory.totalValueLockedETH.plus(pool.totalValueLockedETH)
@@ -506,9 +485,6 @@ export function handleSwap(event: SwapEvent): void {
   token1DayData.save()
   uniswapDayData.save()
   poolDayData.save()
-  poolHourData.save()
-  token0HourData.save()
-  token1HourData.save()
   factory.save()
   pool.save()
   token0.save()
@@ -525,9 +501,9 @@ export function handleSwap(event: SwapEvent): void {
   }
 
   let numIters = oldTick
-      .minus(newTick)
-      .abs()
-      .div(tickSpacing)
+    .minus(newTick)
+    .abs()
+    .div(tickSpacing)
 
   if (numIters.gt(BigInt.fromI32(100))) {
     // In case more than 100 ticks need to be updated ignore the update in
@@ -551,10 +527,10 @@ export function handleSwap(event: SwapEvent): void {
 export function handleFlash(event: FlashEvent): void {
   // update fee growth
   let pool = Pool.load(event.address.toHexString())
-  if (pool == null) {
+  if (!pool) {
+    log.error('Pool not found in handleFlash: {}', [event.address.toHexString()])
     return
   }
-
   let poolContract = PoolABI.bind(event.address)
   let feeGrowthGlobal0X128 = poolContract.feeGrowthGlobal0X128()
   let feeGrowthGlobal1X128 = poolContract.feeGrowthGlobal1X128()
@@ -572,18 +548,18 @@ function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
   tick.feeGrowthOutside1X128 = tickResult.value3
   tick.save()
 
-  updateTickDayData(tick!, event)
+  updateTickDayData(tick, event)
 }
 
 function loadTickUpdateFeeVarsAndSave(tickId: i32, event: ethereum.Event): void {
   let poolAddress = event.address
   let tick = Tick.load(
-      poolAddress
-          .toHexString()
-          .concat('#')
-          .concat(tickId.toString())
+    poolAddress
+      .toHexString()
+      .concat('#')
+      .concat(tickId.toString())
   )
   if (tick !== null) {
-    updateTickFeeVarsAndSave(tick!, event)
+    updateTickFeeVarsAndSave(tick, event)
   }
 }

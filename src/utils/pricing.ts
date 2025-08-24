@@ -1,7 +1,7 @@
 /* eslint-disable prefer-const */
 import { ONE_BD, ZERO_BD, ZERO_BI } from './constants'
-import { Bundle, Pool, Token } from './../types/schema'
-import { BigDecimal, BigInt } from '@graphprotocol/graph-ts'
+import { Bundle, Pool, Token } from '../types/schema'
+import { BigDecimal, BigInt, log } from '@graphprotocol/graph-ts'
 import { exponentToBigDecimal, safeDiv } from '../utils/index'
 
 const WETH_ADDRESS = '0x82af49447d8a07e3bd95bd0d56f35241523fbab1'
@@ -20,9 +20,9 @@ export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, t
   let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
   let denom = BigDecimal.fromString(Q192.toString())
   let price1 = num
-      .div(denom)
-      .times(exponentToBigDecimal(token0.decimals))
-      .div(exponentToBigDecimal(token1.decimals))
+    .div(denom)
+    .times(exponentToBigDecimal(token0.decimals))
+    .div(exponentToBigDecimal(token1.decimals))
 
   let price0 = safeDiv(BigDecimal.fromString('1'), price1)
   return [price0, price1]
@@ -33,10 +33,6 @@ export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, t
 export function getEthPriceInUSD(): BigDecimal {
   // fetch eth prices for each stablecoin
   let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
-
-  if (usdcPool == null) {
-    return ZERO_BD
-  }
 
   // need to only count ETH as having valid USD price if lots of ETH in pool
   if (usdcPool !== null && usdcPool.totalValueLockedToken0.gt(MINIMUM_ETH_LOCKED)) {
@@ -62,16 +58,15 @@ export function findEthPerToken(token: Token): BigDecimal {
   for (let i = 0; i < whiteList.length; ++i) {
     let poolAddress = whiteList[i]
     let pool = Pool.load(poolAddress)
-
-    if (pool == null) {
+    if (!pool) {
+      log.warning('Pool not found in findEthPerToken: {}', [poolAddress])
       continue
     }
-
     if (pool.liquidity.gt(ZERO_BI)) {
       if (pool.token0 == token.id) {
         // whitelist token is token1
         let token1 = Token.load(pool.token1)
-        if (token1 == null) {
+        if (!token1) {
           continue
         }
         // get the derived ETH in pool
@@ -84,7 +79,7 @@ export function findEthPerToken(token: Token): BigDecimal {
       }
       if (pool.token1 == token.id) {
         let token0 = Token.load(pool.token0)
-        if (token0 == null) {
+        if (!token0) {
           continue
         }
         // get the derived ETH in pool
@@ -107,16 +102,16 @@ export function findEthPerToken(token: Token): BigDecimal {
  * If neither is, return 0
  */
 export function getTrackedAmountUSD(
-    tokenAmount0: BigDecimal,
-    token0: Token,
-    tokenAmount1: BigDecimal,
-    token1: Token
+  tokenAmount0: BigDecimal,
+  token0: Token,
+  tokenAmount1: BigDecimal,
+  token1: Token
 ): BigDecimal {
   let bundle = Bundle.load('1')
-  if (bundle == null) {
+  if (!bundle) {
+    log.error('Bundle not found in getTrackedAmountUSD', [])
     return ZERO_BD
   }
-
   let price0USD = token0.derivedETH.times(bundle.ethPriceUSD)
   let price1USD = token1.derivedETH.times(bundle.ethPriceUSD)
 

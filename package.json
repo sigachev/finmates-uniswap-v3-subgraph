@@ -1,29 +1,27 @@
 {
-  "name": "uniswap-v3-subgraph",
+  "name": "finmates-uniswap-v3-subgraph",
   "version": "1.0.0",
-  "repository": "https://github.com/graphprotocol/uniswap-v3-subgraph",
+  "repository": "https://github.com/finmates/finmates-uniswap-v3-subgraph",
   "license": "GPL-3.0-or-later",
   "scripts": {
     "codegen": "graph codegen --output-dir src/types/",
     "build": "graph build",
     "create-local": "graph create finmates/uniswap-v3 --node http://127.0.0.1:8020",
-    "deploy-local": "graph deploy finmates/uniswap-v3 --ipfs http://localhost:5001 --node http://127.0.0.1:8020 --version-label v1.0.0",
-    "deploy": "graph deploy ianlapham/uniswap-arbitrum-one --ipfs https://api.thegraph.com/ipfs/ --node https://api.thegraph.com/deploy/",
-    "deploy-dev": "graph deploy sommelier/uniswap-v3 --ipfs http://35.197.14.14:5000/ --node http://35.197.14.14:8020/",
-    "deploy-staging": "graph deploy $THE_GRAPH_GITHUB_USER/$THE_GRAPH_SUBGRAPH_NAME /Uniswap --ipfs https://api.staging.thegraph.com/ipfs/ --node https://api.staging.thegraph.com/deploy/",
-    "watch-local": "graph deploy ianlapham/uniswap-v3 --watch --node http://127.0.0.1:8020/ --ipfs http://localhost:5001"
+    "deploy-local": "graph deploy finmates/uniswap-v3 --ipfs http://localhost:5001 --node http://127.0.0.1:8020",
+    "deploy": "graph deploy finmates/uniswap-v3-arbitrum --ipfs https://api.thegraph.com/ipfs/ --node https://api.thegraph.com/deploy/",
+    "deploy-studio": "graph deploy --studio finmates-uniswap-v3",
+    "deploy-dev": "graph deploy finmates/uniswap-v3-dev --ipfs http://35.197.14.14:5000/ --node http://35.197.14.14:8020/",
+    "deploy-staging": "graph deploy finmates/uniswap-v3-staging --ipfs https://api.staging.thegraph.com/ipfs/ --node https://api.staging.thegraph.com/deploy/",
+    "watch-local": "graph deploy finmates/uniswap-v3 --watch --node http://127.0.0.1:8020/ --ipfs http://localhost:5001"
   },
   "devDependencies": {
-    "@graphprotocol/graph-cli": "^0.97.0",
-    "@graphprotocol/graph-ts": "^0.38.0",
+    "@graphprotocol/graph-cli": "^0.97.1",
+    "@graphprotocol/graph-ts": "^0.38.1",
     "@typescript-eslint/eslint-plugin": "^8.40.0",
     "@typescript-eslint/parser": "^8.40.0",
-    "eslint": "^9.33.0",
-    "eslint-config-prettier": "^9.1.0",
-    "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
-  },
-  "dependencies": {
-    "npm": "^11.5.2"
+    "eslint": "^9.34.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
   }
 }

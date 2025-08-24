@@ -75,7 +75,7 @@ export function fetchTokenTotalSupply(tokenAddress: Address): BigInt {
   return BigInt.fromI32(0)
 }
 
-export function fetchTokenDecimals(tokenAddress: Address): BigInt | null {
+export function fetchTokenDecimals(tokenAddress: Address): BigInt {
   let contract = ERC20.bind(tokenAddress)
 
   // try with the static definition
@@ -89,5 +89,5 @@ export function fetchTokenDecimals(tokenAddress: Address): BigInt | null {
     return BigInt.fromI32(decimalResult.value)
   }
 
-  return null
+  return BigInt.fromI32(0)
 }

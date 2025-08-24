@@ -97,8 +97,7 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   let token0 = Token.load(position.token0)
   let token1 = Token.load(position.token1)
 
-  // Check if tokens exist
-  if (token0 == null || token1 == null) {
+  if (token0 === null || token1 === null) {
     return
   }
 
@@ -132,8 +131,7 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   let token0 = Token.load(position.token0)
   let token1 = Token.load(position.token1)
 
-  // Check if tokens exist
-  if (token0 == null || token1 == null) {
+  if (token0 === null || token1 === null) {
     return
   }
 
@@ -167,8 +165,7 @@ export function handleCollect(event: Collect): void {
   let token0 = Token.load(position.token0)
   let token1 = Token.load(position.token1)
 
-  // Check if tokens exist
-  if (token0 == null || token1 == null) {
+  if (token0 === null || token1 === null) {
     return
   }
 

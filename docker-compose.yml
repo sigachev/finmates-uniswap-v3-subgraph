@@ -1,117 +1,7 @@
-version: '3.8'
-
+version: '3'
 services:
-  postgres:
-    image: postgres:14-alpine
-    container_name: postgres
-    ports:
-      - '5432:5432'
-    environment:
-      POSTGRES_USER: graph-node
-      POSTGRES_PASSWORD: let-me-in
-      POSTGRES_DB: graph-node
-      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-      LANG: C
-      LC_ALL: C
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U graph-node -d graph-node"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    command:
-      - "postgres"
-      - "-c"
-      - "shared_preload_libraries=pg_stat_statements"
-      - "-c"
-      - "pg_stat_statements.track=all"
-      - "-c"
-      - "max_connections=200"
-      - "-c"
-      - "shared_buffers=512MB"
-      - "-c"
-      - "effective_cache_size=2GB"
-      - "-c"
-      - "maintenance_work_mem=128MB"
-      - "-c"
-      - "checkpoint_completion_target=0.9"
-      - "-c"
-      - "wal_buffers=16MB"
-      - "-c"
-      - "default_statistics_target=100"
-      - "-c"
-      - "random_page_cost=1.1"
-      - "-c"
-      - "effective_io_concurrency=200"
-      - "-c"
-      - "work_mem=8MB"
-      - "-c"
-      - "min_wal_size=512MB"
-      - "-c"
-      - "max_wal_size=2GB"
-
-  ipfs:
-    image: ipfs/go-ipfs:v0.10.0
-    container_name: ipfs
-    ports:
-      - '5001:5001'
-      - '8080:8080'
-    environment:
-      IPFS_PROFILE: server
-      IPFS_PATH: /data/ipfs
-    volumes:
-      - ./data/ipfs:/data/ipfs
-    healthcheck:
-      test: ["CMD", "ipfs", "dag", "stat", "/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
-  # Database initialization service
-  db-init:
-    image: postgres:14-alpine
-    container_name: db-init
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PGPASSWORD: let-me-in
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        echo "Waiting for PostgreSQL to be ready..."
-        until pg_isready -h postgres -U graph-node; do
-          sleep 2
-        done
-        
-        echo "Initializing database for Graph Node..."
-        
-        # Create extensions
-        psql -h postgres -U graph-node -d graph-node <<-EOSQL || true
-          -- Create necessary extensions for Graph Node
-          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-          CREATE EXTENSION IF NOT EXISTS pg_trgm;
-          CREATE EXTENSION IF NOT EXISTS btree_gist;
-          CREATE EXTENSION IF NOT EXISTS postgres_fdw;
-        
-          -- Create a marker table to track initialization
-          CREATE TABLE IF NOT EXISTS graph_node_init (
-              id SERIAL PRIMARY KEY,
-              initialized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-        
-          -- Record initialization
-          INSERT INTO graph_node_init (initialized_at) VALUES (NOW());
-        EOSQL
-        
-        echo "Database initialization complete!"
-    restart: "no"
-
   graph-node:
-    image: graphprotocol/graph-node:v0.35.1
-    container_name: graph-node
+    image: graphprotocol/graph-node:latest
     ports:
       - '8000:8000'
       - '8001:8001'
@@ -119,67 +9,43 @@ services:
       - '8030:8030'
       - '8040:8040'
     depends_on:
-      ipfs:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
+      - ipfs
+      - postgres
     environment:
-      # PostgreSQL connection
       postgres_host: postgres
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
-
-      # IPFS connection
       ipfs: 'ipfs:5001'
-
-      # Ethereum endpoint with Alchemy
-      ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}'
-
-      # Graph Node configuration
+      ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
       GRAPH_LOG: info
-      GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'true'
-      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'true'
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
+    networks:
+      - graph-network
 
-      # Start from recent block (1 week ago)
-      GRAPH_ETHEREUM_GENESIS_BLOCK_NUMBER: '371000000'
-
-      # === OPTIMIZED FOR ALCHEMY FREE TIER ===
-      GRAPH_ETHEREUM_POLLING_INTERVAL: '2000'        # 2 seconds between polls
-      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '5'           # Very small batches
-      GRAPH_ETHEREUM_RPC_MAX_PARALLEL_REQUESTS: '5'  # Limited parallel requests
-      GRAPH_ETHEREUM_REQUEST_RETRIES: '20'
-      GRAPH_ETHEREUM_RETRY_JITTER_BASE: '500'
-      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: '120'
-      GRAPH_ETHEREUM_REQUEST_TIMEOUT: '180'
-      GRAPH_ETHEREUM_CONNECTION_TIMEOUT: '60'
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '500'
-      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '250'
-      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '25'
-      GRAPH_ETHEREUM_BLOCK_STREAM_BUFFER_SIZE: '10000'
-      GRAPH_ETHEREUM_CACHE_SUBGRAPH_BLOCKS: 'true'
-      GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: 'true'
-      GRAPH_ETHEREUM_PROVIDER_SLEEP_ON_RATE_LIMIT_ERRORS: '10000'
-      GRAPH_ETHEREUM_PROVIDER_RATE_LIMIT_BACKOFF_EXPONENT: '2'
-      GRAPH_ETHEREUM_PROVIDER_MAX_RATE_LIMIT_RETRIES: '15'
-
-      # GraphQL settings
-      GRAPH_GRAPHQL_MAX_FIRST: '1000'
-      GRAPH_GRAPHQL_MAX_SKIP: '1000'
-      GRAPH_GRAPHQL_QUERY_TIMEOUT: '120'
-      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
-
-      # Database settings
-      GRAPH_STORE_CONNECTION_POOL_SIZE: '10'
-      GRAPH_POSTGRES_STATEMENT_TIMEOUT: '300s'
-      GRAPH_LOG_QUERY_TIMING: 'gql'
-
-    restart: unless-stopped
+  ipfs:
+    image: ipfs/go-ipfs:v0.10.0
+    ports:
+      - '5001:5001'
     volumes:
-      - ./data/graph-node:/data
+      - ./data/ipfs:/data/ipfs
+    networks:
+      - graph-network
+
+  postgres:
+    image: postgres:14
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: graph-node
+      POSTGRES_PASSWORD: let-me-in
+      POSTGRES_DB: graph-node
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - graph-network
 
 networks:
-  default:
-    name: graph-network
+  graph-network:
+    driver: bridge

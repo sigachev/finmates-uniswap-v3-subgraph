@@ -1,24 +1,21 @@
 specVersion: 0.0.4
-description: Uniswap is a decentralized protocol for automated token exchange on Ethereum.
-repository: https://github.com/Uniswap/uniswap-v3-subgraph
+description: Finmates Uniswap V3 Subgraph for Arbitrum
+repository: https://github.com/finmates/finmates-uniswap-v3-subgraph
 schema:
-  file: ./src/v3/schema.graphql
-features:
-  - nonFatalErrors
-  - grafting
+  file: ./schema.graphql
 dataSources:
   - kind: ethereum/contract
     name: Factory
     network: arbitrum-one
     source:
-      abi: Factory
       address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
-      startBlock: 365000000
+      abi: Factory
+      startBlock: 165
     mapping:
       kind: ethereum/events
-      apiVersion: 0.0.7
+      apiVersion: 0.0.6
       language: wasm/assemblyscript
-      file: ./src/v3/mappings/factory.ts
+      file: ./src/mappings/factory.ts
       entities:
         - Pool
         - Token
@@ -36,6 +33,41 @@ dataSources:
       eventHandlers:
         - event: PoolCreated(indexed address,indexed address,indexed uint24,int24,address)
           handler: handlePoolCreated
+  - kind: ethereum/contract
+    name: NonfungiblePositionManager
+    network: arbitrum-one
+    source:
+      address: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
+      abi: NonfungiblePositionManager
+      startBlock: 165
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.6
+      language: wasm/assemblyscript
+      file: ./src/mappings/position-manager.ts
+      entities:
+        - Position
+        - PositionSnapshot
+        - Transaction
+        - Token
+      abis:
+        - name: NonfungiblePositionManager
+          file: ./abis/NonfungiblePositionManager.json
+        - name: Pool
+          file: ./abis/pool.json
+        - name: Factory
+          file: ./abis/factory.json
+        - name: ERC20
+          file: ./abis/ERC20.json
+      eventHandlers:
+        - event: IncreaseLiquidity(indexed uint256,uint128,uint256,uint256)
+          handler: handleIncreaseLiquidity
+        - event: DecreaseLiquidity(indexed uint256,uint128,uint256,uint256)
+          handler: handleDecreaseLiquidity
+        - event: Collect(indexed uint256,address,uint256,uint256)
+          handler: handleCollect
+        - event: Transfer(indexed address,indexed address,indexed uint256)
+          handler: handleTransfer
 templates:
   - kind: ethereum/contract
     name: Pool
@@ -44,12 +76,21 @@ templates:
       abi: Pool
     mapping:
       kind: ethereum/events
-      apiVersion: 0.0.7
+      apiVersion: 0.0.6
       language: wasm/assemblyscript
-      file: ./src/v3/mappings/core.ts
+      file: ./src/mappings/core.ts
       entities:
         - Pool
         - Token
+        - Transaction
+        - Mint
+        - Burn
+        - Swap
+        - Collect
+        - Flash
+        - Tick
+        - PoolDayData
+        - PoolHourData
       abis:
         - name: Pool
           file: ./abis/pool.json
@@ -62,11 +103,11 @@ templates:
           handler: handleInitialize
         - event: Swap(indexed address,indexed address,int256,int256,uint160,uint128,int24)
           handler: handleSwap
-        - event: Mint(address,indexed address,indexed int24,indexed
-            int24,uint128,uint256,uint256)
+        - event: Mint(address,indexed address,indexed int24,indexed int24,uint128,uint256,uint256)
           handler: handleMint
         - event: Burn(indexed address,indexed int24,indexed int24,uint128,uint256,uint256)
           handler: handleBurn
-        - event: Collect(indexed address,address,indexed int24,indexed
-            int24,uint128,uint128)
+        - event: Collect(indexed address,address,indexed int24,indexed int24,uint128,uint128)
           handler: handleCollect
+        - event: Flash(indexed address,indexed address,uint256,uint256,uint256,uint256)
+          handler: handleFlash
