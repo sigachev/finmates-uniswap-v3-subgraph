@@ -20,10 +20,12 @@ export let WHITELIST_TOKENS: string[] = [
 
 let MINIMUM_ETH_LOCKED = BigDecimal.fromString('0.01')
 
-let Q192 = 2 ** 192
+// Q192 = 2^192 as a string to avoid JavaScript number overflow
+const Q192 = '6277101735386680763835789423207666416102355444464034512896'
+
 export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, token1: Token): BigDecimal[] {
   let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
-  let denom = BigDecimal.fromString(Q192.toString())
+  let denom = BigDecimal.fromString(Q192)
 
   // Ensure we have valid decimals
   let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
