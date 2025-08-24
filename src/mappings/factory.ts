@@ -70,7 +70,7 @@ export function handlePoolCreated(event: PoolCreated): void {
     // bail if we couldn't figure out the decimals
     if (decimals === null) {
       log.debug('mybug the decimal on token 0 was null', [])
-      return
+      decimals = BigInt.fromI32(18) // Default to 18 decimals
     }
 
     token0.decimals = decimals
@@ -95,8 +95,8 @@ export function handlePoolCreated(event: PoolCreated): void {
     let decimals = fetchTokenDecimals(event.params.token1)
     // bail if we couldn't figure out the decimals
     if (decimals === null) {
-      log.debug('mybug the decimal on token 0 was null', [])
-      return
+      log.debug('mybug the decimal on token 1 was null', [])
+      decimals = BigInt.fromI32(18) // Default to 18 decimals
     }
     token1.decimals = decimals
     token1.derivedETH = ZERO_BD

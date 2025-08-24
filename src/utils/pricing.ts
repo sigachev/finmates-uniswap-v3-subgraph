@@ -24,10 +24,15 @@ let Q192 = 2 ** 192
 export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, token1: Token): BigDecimal[] {
   let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
   let denom = BigDecimal.fromString(Q192.toString())
+
+  // Ensure we have valid decimals
+  let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
+  let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
+
   let price1 = num
     .div(denom)
-    .times(exponentToBigDecimal(token0.decimals))
-    .div(exponentToBigDecimal(token1.decimals))
+    .times(exponentToBigDecimal(token0Decimals))
+    .div(exponentToBigDecimal(token1Decimals))
 
   let price0 = safeDiv(BigDecimal.fromString('1'), price1)
   return [price0, price1]

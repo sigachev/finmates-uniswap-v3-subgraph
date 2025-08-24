@@ -89,5 +89,6 @@ export function fetchTokenDecimals(tokenAddress: Address): BigInt {
     return BigInt.fromI32(decimalResult.value)
   }
 
-  return BigInt.fromI32(0)
+  // Default to 18 decimals if we can't fetch them
+  return BigInt.fromI32(18)
 }
