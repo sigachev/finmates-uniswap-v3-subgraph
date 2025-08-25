@@ -85,14 +85,10 @@ export function getEthPriceInUSD(): BigDecimal {
     let token1 = Token.load(usdcPool.token1)
 
     if (token0 !== null && token1 !== null) {
-      try {
-        let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
-        // USDC is token1, so we want token1Price which is ETH/USDC
-        if (prices[1].gt(ZERO_BD) && prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check
-          return prices[1]
-        }
-      } catch (e) {
-        log.warning('Failed to calculate ETH price from pool: {}', [e.toString()])
+      let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
+      // USDC is token1, so we want token1Price which is ETH/USDC
+      if (prices[1].gt(ZERO_BD) && prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check
+        return prices[1]
       }
     }
   }
