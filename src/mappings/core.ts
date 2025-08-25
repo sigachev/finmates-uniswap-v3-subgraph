@@ -1,5 +1,5 @@
 /* eslint-disable prefer-const */
-import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token } from '../types/schema'
+import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token, Collect, Flash } from '../types/schema'
 import { Pool as PoolABI } from '../types/Factory/Pool'
 import { BigDecimal, BigInt, ethereum, log } from '@graphprotocol/graph-ts'
 import {
@@ -7,7 +7,8 @@ import {
   Flash as FlashEvent,
   Initialize,
   Mint as MintEvent,
-  Swap as SwapEvent
+  Swap as SwapEvent,
+  Collect as CollectEvent
 } from '../types/templates/Pool/Pool'
 import { convertTokenToDecimal, loadTransaction, safeDiv } from '../utils'
 import { FACTORY_ADDRESS, ONE_BI, ZERO_BD, ZERO_BI } from '../utils/constants'
@@ -33,7 +34,10 @@ function ensureBundleExists(): Bundle {
 
   // Always ensure we have a valid ETH price - never let it be zero
   if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
-    bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    bundle.ethPriceUSD = getEthPriceInUSD()
+    if (bundle.ethPriceUSD.equals(ZERO_BD)) {
+      bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    }
     bundle.save()
   }
 
@@ -41,17 +45,43 @@ function ensureBundleExists(): Bundle {
 }
 
 export function handleInitialize(event: Initialize): void {
+  // CRITICAL: Ensure bundle exists
+  ensureBundleExists()
+
   let pool = Pool.load(event.address.toHexString())
   if (pool === null) {
     log.error('Pool not found in handleInitialize: {}', [event.address.toHexString()])
     return
   }
+
   pool.sqrtPrice = event.params.sqrtPriceX96
   pool.tick = BigInt.fromI32(event.params.tick)
+
+  // Try to update prices if we have valid tokens
+  let token0 = Token.load(pool.token0)
+  let token1 = Token.load(pool.token1)
+
+  if (token0 !== null && token1 !== null && pool.sqrtPrice.gt(ZERO_BI)) {
+    try {
+      let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
+      pool.token0Price = prices[0]
+      pool.token1Price = prices[1]
+    } catch (e) {
+      log.warning('Failed to calculate initial prices for pool {}: {}', [pool.id, e.toString()])
+      pool.token0Price = ZERO_BD
+      pool.token1Price = ZERO_BD
+    }
+  }
+
   pool.save()
 
-  updatePoolDayData(event)
-  updatePoolHourData(event)
+  // Safe update of pool data
+  try {
+    updatePoolDayData(event)
+    updatePoolHourData(event)
+  } catch (e) {
+    log.error('Failed to update pool data in handleInitialize: {}', [e.toString()])
+  }
 }
 
 export function handleMint(event: MintEvent): void {
@@ -60,16 +90,20 @@ export function handleMint(event: MintEvent): void {
   let pool = Pool.load(poolAddress)
   let factory = Factory.load(FACTORY_ADDRESS)
 
-  if (!pool || !factory) {
-    log.error('Missing required entities in handleMint', [])
+  if (pool === null) {
+    log.error('Pool not found in handleMint: {}', [poolAddress])
+    return
+  }
+  if (factory === null) {
+    log.error('Factory not found in handleMint', [])
     return
   }
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
-  if (!token0 || !token1) {
-    log.error('Missing tokens in handleMint for pool {}', [poolAddress])
+  if (token0 === null || token1 === null) {
+    log.error('Tokens not found in handleMint for pool {}', [poolAddress])
     return
   }
 
@@ -190,16 +224,20 @@ export function handleBurn(event: BurnEvent): void {
   let pool = Pool.load(poolAddress)
   let factory = Factory.load(FACTORY_ADDRESS)
 
-  if (!pool || !factory) {
-    log.error('Missing required entities in handleBurn', [])
+  if (pool === null) {
+    log.error('Pool not found in handleBurn: {}', [poolAddress])
+    return
+  }
+  if (factory === null) {
+    log.error('Factory not found in handleBurn', [])
     return
   }
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
-  if (!token0 || !token1) {
-    log.error('Missing tokens in handleBurn for pool {}', [poolAddress])
+  if (token0 === null || token1 === null) {
+    log.error('Tokens not found in handleBurn for pool {}', [poolAddress])
     return
   }
 
@@ -273,7 +311,7 @@ export function handleBurn(event: BurnEvent): void {
   let lowerTick = Tick.load(lowerTickId)
   let upperTick = Tick.load(upperTickId)
 
-  if (!lowerTick || !upperTick) {
+  if (lowerTick === null || upperTick === null) {
     log.error('Missing ticks in handleBurn for pool {}', [poolAddress])
     return
   }
@@ -307,12 +345,12 @@ export function handleSwap(event: SwapEvent): void {
   let pool = Pool.load(event.address.toHexString())
 
   // Early return if critical entities are missing
-  if (!factory || !pool) {
-    log.error('Missing required entities - bundle: {}, factory: {}, pool: {}', [
-      'exists',
-      factory ? 'exists' : 'null',
-      pool ? 'exists' : 'null'
-    ])
+  if (factory === null) {
+    log.error('Factory not found in handleSwap', [])
+    return
+  }
+  if (pool === null) {
+    log.error('Pool not found in handleSwap: {}', [event.address.toHexString()])
     return
   }
 
@@ -324,9 +362,15 @@ export function handleSwap(event: SwapEvent): void {
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
-  if (!token0 || !token1) {
-    log.error('Missing tokens in handleSwap for pool {}', [pool.id])
+  if (token0 === null || token1 === null) {
+    log.error('Tokens not found in handleSwap for pool {}', [pool.id])
     return
+  }
+
+  // Ensure pool has a valid tick before processing
+  if (pool.tick === null) {
+    log.warning('Pool tick is null in handleSwap for pool {}, initializing to event tick', [pool.id])
+    pool.tick = BigInt.fromI32(event.params.tick)
   }
 
   let oldTick = pool.tick!
@@ -354,11 +398,6 @@ export function handleSwap(event: SwapEvent): void {
   let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
     BigDecimal.fromString('2')
   )
-  // Ensure we have a valid ETH price before calculating ETH tracked amount
-  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
-    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
-    bundle.save()
-  }
 
   let amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
   let amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
@@ -418,6 +457,7 @@ export function handleSwap(event: SwapEvent): void {
   // update USD pricing
   bundle.ethPriceUSD = getEthPriceInUSD()
   bundle.save()
+
   token0.derivedETH = findEthPerToken(token0 as Token)
   token1.derivedETH = findEthPerToken(token1 as Token)
 
@@ -455,10 +495,15 @@ export function handleSwap(event: SwapEvent): void {
 
   // update fee growth
   let poolContract = PoolABI.bind(event.address)
-  let feeGrowthGlobal0X128 = poolContract.feeGrowthGlobal0X128()
-  let feeGrowthGlobal1X128 = poolContract.feeGrowthGlobal1X128()
-  pool.feeGrowthGlobal0X128 = feeGrowthGlobal0X128 as BigInt
-  pool.feeGrowthGlobal1X128 = feeGrowthGlobal1X128 as BigInt
+  let feeGrowthGlobal0X128Result = poolContract.try_feeGrowthGlobal0X128()
+  let feeGrowthGlobal1X128Result = poolContract.try_feeGrowthGlobal1X128()
+
+  if (!feeGrowthGlobal0X128Result.reverted) {
+    pool.feeGrowthGlobal0X128 = feeGrowthGlobal0X128Result.value
+  }
+  if (!feeGrowthGlobal1X128Result.reverted) {
+    pool.feeGrowthGlobal1X128 = feeGrowthGlobal1X128Result.value
+  }
 
   // interval data
   let uniswapDayData = updateUniswapDayData(event)
@@ -509,6 +554,9 @@ export function handleSwap(event: SwapEvent): void {
   token1DayData.save()
   uniswapDayData.save()
   poolDayData.save()
+  poolHourData.save()
+  token0HourData.save()
+  token1HourData.save()
   factory.save()
   pool.save()
   token0.save()
@@ -549,30 +597,87 @@ export function handleSwap(event: SwapEvent): void {
 }
 
 export function handleFlash(event: FlashEvent): void {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   // update fee growth
   let pool = Pool.load(event.address.toHexString())
-  if (!pool) {
+  if (pool === null) {
     log.error('Pool not found in handleFlash: {}', [event.address.toHexString()])
     return
   }
+
   let poolContract = PoolABI.bind(event.address)
-  let feeGrowthGlobal0X128 = poolContract.feeGrowthGlobal0X128()
-  let feeGrowthGlobal1X128 = poolContract.feeGrowthGlobal1X128()
-  pool.feeGrowthGlobal0X128 = feeGrowthGlobal0X128 as BigInt
-  pool.feeGrowthGlobal1X128 = feeGrowthGlobal1X128 as BigInt
+  let feeGrowthGlobal0X128Result = poolContract.try_feeGrowthGlobal0X128()
+  let feeGrowthGlobal1X128Result = poolContract.try_feeGrowthGlobal1X128()
+
+  if (!feeGrowthGlobal0X128Result.reverted) {
+    pool.feeGrowthGlobal0X128 = feeGrowthGlobal0X128Result.value
+  }
+  if (!feeGrowthGlobal1X128Result.reverted) {
+    pool.feeGrowthGlobal1X128 = feeGrowthGlobal1X128Result.value
+  }
+
   pool.save()
+}
+
+export function handleCollect(event: CollectEvent): void {
+  let bundle = ensureBundleExists()
+  let pool = Pool.load(event.address.toHexString())
+
+  if (pool === null) {
+    log.error('Pool not found in handleCollect: {}', [event.address.toHexString()])
+    return
+  }
+
+  let token0 = Token.load(pool.token0)
+  let token1 = Token.load(pool.token1)
+
+  if (token0 === null || token1 === null) {
+    log.error('Tokens not found in handleCollect for pool {}', [pool.id])
+    return
+  }
+
+  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+  let amountUSD = amount0
+    .times(token0.derivedETH.times(bundle.ethPriceUSD))
+    .plus(amount1.times(token1.derivedETH.times(bundle.ethPriceUSD)))
+
+  pool.collectedFeesToken0 = pool.collectedFeesToken0.plus(amount0)
+  pool.collectedFeesToken1 = pool.collectedFeesToken1.plus(amount1)
+  pool.collectedFeesUSD = pool.collectedFeesUSD.plus(amountUSD)
+  pool.save()
+
+  let transaction = loadTransaction(event)
+  let collect = new Collect(transaction.id + '#' + pool.txCount.toString())
+  collect.transaction = transaction.id
+  collect.timestamp = event.block.timestamp
+  collect.pool = pool.id
+  collect.owner = event.params.owner
+  collect.amount0 = amount0
+  collect.amount1 = amount1
+  collect.amountUSD = amountUSD
+  collect.tickLower = BigInt.fromI32(event.params.tickLower)
+  collect.tickUpper = BigInt.fromI32(event.params.tickUpper)
+  collect.logIndex = event.logIndex
+  collect.save()
 }
 
 function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
   let poolAddress = event.address
   // not all ticks are initialized so obtaining null is expected behavior
   let poolContract = PoolABI.bind(poolAddress)
-  let tickResult = poolContract.ticks(tick.tickIdx.toI32())
-  tick.feeGrowthOutside0X128 = tickResult.value2
-  tick.feeGrowthOutside1X128 = tickResult.value3
-  tick.save()
+  let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
 
-  updateTickDayData(tick, event)
+  if (!tickResult.reverted) {
+    tick.feeGrowthOutside0X128 = tickResult.value.value2
+    tick.feeGrowthOutside1X128 = tickResult.value.value3
+    tick.save()
+
+    updateTickDayData(tick, event)
+  }
 }
 
 function loadTickUpdateFeeVarsAndSave(tickId: i32, event: ethereum.Event): void {

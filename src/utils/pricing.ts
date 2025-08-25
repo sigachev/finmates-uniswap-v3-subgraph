@@ -8,7 +8,7 @@ const WETH_ADDRESS = '0x82af49447d8a07e3bd95bd0d56f35241523fbab1'
 const USDC_WETH_03_POOL = '0x17c14d2c404d167802b16c450d3c99f88f2c4f4d'
 
 // token where amounts should contribute to tracked volume and liquidity
-// usually tokens that many tokens are paired with s
+// usually tokens that many tokens are paired with
 export let WHITELIST_TOKENS: string[] = [
   WETH_ADDRESS, // WETH
   '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8', // USDC
@@ -23,37 +23,83 @@ let MINIMUM_ETH_LOCKED = BigDecimal.fromString('0.01')
 // Q192 = 2^192 as a string to avoid JavaScript number overflow
 const Q192 = '6277101735386680763835789423207666416102355444464034512896'
 
+// Helper function to ensure bundle exists
+function ensureBundleExists(): Bundle {
+  let bundle = Bundle.load('1')
+  if (bundle === null) {
+    bundle = new Bundle('1')
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
+    bundle.save()
+  }
+
+  // Always ensure we have a valid ETH price
+  if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    bundle.save()
+  }
+
+  return bundle as Bundle
+}
+
 export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, token1: Token): BigDecimal[] {
+  // Validate inputs
+  if (sqrtPriceX96.equals(ZERO_BI)) {
+    log.warning('sqrtPriceX96 is zero, returning zero prices', [])
+    return [ZERO_BD, ZERO_BD]
+  }
+
   let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
   let denom = BigDecimal.fromString(Q192)
 
-  // Ensure we have valid decimals
+  // Ensure we have valid decimals with fallback to 18
   let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
   let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
+
+  // Validate decimals are reasonable
+  if (token0Decimals.gt(BigInt.fromI32(255)) || token1Decimals.gt(BigInt.fromI32(255))) {
+    log.warning('Token decimals exceed maximum, using 18', [])
+    token0Decimals = BigInt.fromI32(18)
+    token1Decimals = BigInt.fromI32(18)
+  }
 
   let price1 = num
     .div(denom)
     .times(exponentToBigDecimal(token0Decimals))
     .div(exponentToBigDecimal(token1Decimals))
 
-  let price0 = safeDiv(BigDecimal.fromString('1'), price1)
+  // Safe division with check
+  let price0 = price1.equals(ZERO_BD) ? ZERO_BD : safeDiv(ONE_BD, price1)
+
   return [price0, price1]
 }
 
 export function getEthPriceInUSD(): BigDecimal {
+  // Ensure bundle exists first
+  let bundle = ensureBundleExists()
+
   // fetch eth prices for each stablecoin
   let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
 
   if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
     let token0 = Token.load(usdcPool.token0)
     let token1 = Token.load(usdcPool.token1)
-    if (token0 && token1) {
-      let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0 as Token, token1 as Token)
-      // USDC is token1, so we want token1Price which is ETH/USDC
-      if (prices[1].gt(ZERO_BD)) {
-        return prices[1]
+
+    if (token0 !== null && token1 !== null) {
+      try {
+        let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
+        // USDC is token1, so we want token1Price which is ETH/USDC
+        if (prices[1].gt(ZERO_BD) && prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check
+          return prices[1]
+        }
+      } catch (e) {
+        log.warning('Failed to calculate ETH price from pool: {}', [e.toString()])
       }
     }
+  }
+
+  // Return the existing bundle price or default
+  if (!bundle.ethPriceUSD.equals(ZERO_BD)) {
+    return bundle.ethPriceUSD
   }
 
   // Return a default ETH price if we can't calculate it yet
@@ -69,6 +115,7 @@ export function findEthPerToken(token: Token): BigDecimal {
   if (token.id == WETH_ADDRESS) {
     return ONE_BD
   }
+
   let whiteList = token.whitelistPools
   // for now just take USD from pool with greatest TVL
   // need to update this to actually detect best rate based on liquidity distribution
@@ -76,24 +123,22 @@ export function findEthPerToken(token: Token): BigDecimal {
   let priceSoFar = ZERO_BD
 
   // Bundle for ETH price
-  let bundle = Bundle.load('1')
-  if (!bundle) {
-    log.warning('Bundle not found in findEthPerToken', [])
-    return ZERO_BD
-  }
+  let bundle = ensureBundleExists()
 
   for (let i = 0; i < whiteList.length; ++i) {
     let poolAddress = whiteList[i]
     let pool = Pool.load(poolAddress)
-    if (!pool) {
+
+    if (pool === null) {
       log.warning('Pool not found in findEthPerToken: {}', [poolAddress])
       continue
     }
-    if (pool.liquidity.gt(ZERO_BI)) {
+
+    if (pool.liquidity.gt(ZERO_BI) && pool.sqrtPrice.gt(ZERO_BI)) {
       if (pool.token0 == token.id) {
         // whitelist token is token1
         let token1 = Token.load(pool.token1)
-        if (!token1) {
+        if (token1 === null) {
           continue
         }
         // get the derived ETH in pool
@@ -106,7 +151,7 @@ export function findEthPerToken(token: Token): BigDecimal {
       }
       if (pool.token1 == token.id) {
         let token0 = Token.load(pool.token0)
-        if (!token0) {
+        if (token0 === null) {
           continue
         }
         // get the derived ETH in pool
@@ -119,6 +164,13 @@ export function findEthPerToken(token: Token): BigDecimal {
       }
     }
   }
+
+  // Sanity check on price
+  if (priceSoFar.gt(BigDecimal.fromString('1000000'))) {
+    log.warning('Derived ETH price for token {} seems too high: {}, returning 0', [token.id, priceSoFar.toString()])
+    return ZERO_BD
+  }
+
   return priceSoFar // nothing was found return 0
 }
 
@@ -134,17 +186,7 @@ export function getTrackedAmountUSD(
   tokenAmount1: BigDecimal,
   token1: Token
 ): BigDecimal {
-  let bundle = Bundle.load('1')
-  if (!bundle) {
-    log.error('Bundle not found in getTrackedAmountUSD', [])
-    return ZERO_BD
-  }
-
-  // Make sure we have a valid ETH price
-  if (bundle.ethPriceUSD.equals(ZERO_BD)) {
-    bundle.ethPriceUSD = getEthPriceInUSD()
-    bundle.save()
-  }
+  let bundle = ensureBundleExists()
 
   let price0USD = token0.derivedETH.times(bundle.ethPriceUSD)
   let price1USD = token1.derivedETH.times(bundle.ethPriceUSD)

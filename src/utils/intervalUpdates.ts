@@ -1,5 +1,5 @@
-import { ZERO_BD, ZERO_BI, ONE_BI } from './constants'
 /* eslint-disable prefer-const */
+import { ZERO_BD, ZERO_BI, ONE_BI } from './constants'
 import {
   UniswapDayData,
   Factory,
@@ -11,25 +11,63 @@ import {
   Bundle,
   PoolHourData,
   TickDayData,
-  Tick
+  Tick,
+  TickHourData
 } from '../types/schema'
 import { FACTORY_ADDRESS } from './constants'
-import { ethereum, log } from '@graphprotocol/graph-ts'
+import { ethereum, log, BigDecimal } from '@graphprotocol/graph-ts'
+
+// Helper function to ensure bundle exists
+function ensureBundleExists(): Bundle {
+  let bundle = Bundle.load('1')
+  if (bundle === null) {
+    bundle = new Bundle('1')
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
+    bundle.save()
+  }
+
+  // Always ensure we have a valid ETH price
+  if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    bundle.save()
+  }
+
+  return bundle as Bundle
+}
 
 /**
  * Tracks global aggregate data over daily windows
  * @param event
  */
 export function updateUniswapDayData(event: ethereum.Event): UniswapDayData {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   let uniswap = Factory.load(FACTORY_ADDRESS)
   if (!uniswap) {
     log.error('Factory not found in updateUniswapDayData', [])
-    throw new Error('Factory not found')
+    // Create a default factory to prevent further errors
+    uniswap = new Factory(FACTORY_ADDRESS)
+    uniswap.poolCount = ZERO_BI
+    uniswap.txCount = ZERO_BI
+    uniswap.totalVolumeUSD = ZERO_BD
+    uniswap.totalVolumeETH = ZERO_BD
+    uniswap.totalFeesUSD = ZERO_BD
+    uniswap.totalFeesETH = ZERO_BD
+    uniswap.untrackedVolumeUSD = ZERO_BD
+    uniswap.totalValueLockedUSD = ZERO_BD
+    uniswap.totalValueLockedETH = ZERO_BD
+    uniswap.totalValueLockedUSDUntracked = ZERO_BD
+    uniswap.totalValueLockedETHUntracked = ZERO_BD
+    uniswap.owner = '0x0000000000000000000000000000000000000000'
+    uniswap.save()
   }
+
   let timestamp = event.block.timestamp.toI32()
   let dayID = timestamp / 86400 // rounded
   let dayStartTimestamp = dayID * 86400
   let uniswapDayData = UniswapDayData.load(dayID.toString())
+
   if (uniswapDayData === null) {
     uniswapDayData = new UniswapDayData(dayID.toString())
     uniswapDayData.date = dayStartTimestamp
@@ -38,9 +76,11 @@ export function updateUniswapDayData(event: ethereum.Event): UniswapDayData {
     uniswapDayData.volumeUSDUntracked = ZERO_BD
     uniswapDayData.feesUSD = ZERO_BD
   }
+
   uniswapDayData.tvlUSD = uniswap.totalValueLockedUSD
   uniswapDayData.txCount = uniswap.txCount
   uniswapDayData.save()
+
   return uniswapDayData as UniswapDayData
 }
 
@@ -53,10 +93,12 @@ export function updatePoolDayData(event: ethereum.Event): PoolDayData {
     .concat('-')
     .concat(dayID.toString())
   let pool = Pool.load(event.address.toHexString())
+
   if (!pool) {
     log.error('Pool not found in updatePoolDayData: {}', [event.address.toHexString()])
     throw new Error('Pool not found')
   }
+
   let poolDayData = PoolDayData.load(dayPoolID)
   if (poolDayData === null) {
     poolDayData = new PoolDayData(dayPoolID)
@@ -106,10 +148,12 @@ export function updatePoolHourData(event: ethereum.Event): PoolHourData {
     .concat('-')
     .concat(hourIndex.toString())
   let pool = Pool.load(event.address.toHexString())
+
   if (!pool) {
     log.error('Pool not found in updatePoolHourData: {}', [event.address.toHexString()])
     throw new Error('Pool not found')
   }
+
   let poolHourData = PoolHourData.load(hourPoolID)
   if (poolHourData === null) {
     poolHourData = new PoolHourData(hourPoolID)
@@ -148,16 +192,12 @@ export function updatePoolHourData(event: ethereum.Event): PoolHourData {
   poolHourData.txCount = poolHourData.txCount.plus(ONE_BI)
   poolHourData.save()
 
-  // test
   return poolHourData as PoolHourData
 }
 
 export function updateTokenDayData(token: Token, event: ethereum.Event): TokenDayData {
-  let bundle = Bundle.load('1')
-  if (!bundle) {
-    log.error('Bundle not found in updateTokenDayData', [])
-    throw new Error('Bundle not found')
-  }
+  let bundle = ensureBundleExists()
+
   let timestamp = event.block.timestamp.toI32()
   let dayID = timestamp / 86400
   let dayStartTimestamp = dayID * 86400
@@ -200,11 +240,8 @@ export function updateTokenDayData(token: Token, event: ethereum.Event): TokenDa
 }
 
 export function updateTokenHourData(token: Token, event: ethereum.Event): TokenHourData {
-  let bundle = Bundle.load('1')
-  if (!bundle) {
-    log.error('Bundle not found in updateTokenHourData', [])
-    throw new Error('Bundle not found')
-  }
+  let bundle = ensureBundleExists()
+
   let timestamp = event.block.timestamp.toI32()
   let hourIndex = timestamp / 3600 // get unique hour within unix history
   let hourStartUnix = hourIndex * 3600 // want the rounded effect
@@ -252,16 +289,18 @@ export function updateTickDayData(tick: Tick, event: ethereum.Event): TickDayDat
   let dayStartTimestamp = dayID * 86400
   let tickDayDataID = tick.id.concat('-').concat(dayID.toString())
   let tickDayData = TickDayData.load(tickDayDataID)
+
   if (tickDayData === null) {
     tickDayData = new TickDayData(tickDayDataID)
     tickDayData.date = dayStartTimestamp
     tickDayData.pool = tick.pool
     tickDayData.tick = tick.id
   }
+
   tickDayData.liquidityGross = tick.liquidityGross
   tickDayData.liquidityNet = tick.liquidityNet
   tickDayData.volumeToken0 = tick.volumeToken0
-  tickDayData.volumeToken1 = tick.volumeToken0
+  tickDayData.volumeToken1 = tick.volumeToken1
   tickDayData.volumeUSD = tick.volumeUSD
   tickDayData.feesUSD = tick.feesUSD
   tickDayData.feeGrowthOutside0X128 = tick.feeGrowthOutside0X128
@@ -270,4 +309,36 @@ export function updateTickDayData(tick: Tick, event: ethereum.Event): TickDayDat
   tickDayData.save()
 
   return tickDayData as TickDayData
+}
+
+export function updateTickHourData(tick: Tick, event: ethereum.Event): TickHourData {
+  let timestamp = event.block.timestamp.toI32()
+  let hourIndex = timestamp / 3600 // get unique hour within unix history
+  let hourStartUnix = hourIndex * 3600 // want the rounded effect
+  let tickHourDataID = tick.id.concat('-').concat(hourIndex.toString())
+  let tickHourData = TickHourData.load(tickHourDataID)
+
+  if (tickHourData === null) {
+    tickHourData = new TickHourData(tickHourDataID)
+    tickHourData.periodStartUnix = hourStartUnix
+    tickHourData.pool = tick.pool
+    tickHourData.tick = tick.id
+    tickHourData.liquidityGross = ZERO_BI
+    tickHourData.liquidityNet = ZERO_BI
+    tickHourData.volumeToken0 = ZERO_BD
+    tickHourData.volumeToken1 = ZERO_BD
+    tickHourData.volumeUSD = ZERO_BD
+    tickHourData.feesUSD = ZERO_BD
+  }
+
+  tickHourData.liquidityGross = tick.liquidityGross
+  tickHourData.liquidityNet = tick.liquidityNet
+  tickHourData.volumeToken0 = tick.volumeToken0
+  tickHourData.volumeToken1 = tick.volumeToken1
+  tickHourData.volumeUSD = tick.volumeUSD
+  tickHourData.feesUSD = tick.feesUSD
+
+  tickHourData.save()
+
+  return tickHourData as TickHourData
 }

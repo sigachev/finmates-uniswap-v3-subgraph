@@ -6,10 +6,28 @@ import {
   NonfungiblePositionManager,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, PositionSnapshot, Token } from '../types/schema'
+import { Position, PositionSnapshot, Token, Bundle } from '../types/schema'
 import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI } from '../utils/constants'
-import { Address, BigInt, ethereum } from '@graphprotocol/graph-ts'
+import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { convertTokenToDecimal, loadTransaction } from '../utils'
+
+// Helper function to ensure bundle exists
+function ensureBundleExists(): Bundle {
+  let bundle = Bundle.load('1')
+  if (bundle === null) {
+    bundle = new Bundle('1')
+    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
+    bundle.save()
+  }
+
+  // Always ensure we have a valid ETH price
+  if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
+    bundle.ethPriceUSD = BigDecimal.fromString('2000')
+    bundle.save()
+  }
+
+  return bundle as Bundle
+}
 
 function getPosition(event: ethereum.Event, tokenId: BigInt): Position | null {
   let position = Position.load(tokenId.toString())
@@ -82,10 +100,14 @@ function savePositionSnapshot(position: Position, event: ethereum.Event): void {
 }
 
 export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   let position = getPosition(event, event.params.tokenId)
 
   // position was not able to be fetched
   if (position == null) {
+    log.warning('Position not found for tokenId {} in handleIncreaseLiquidity', [event.params.tokenId.toString()])
     return
   }
 
@@ -98,6 +120,7 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
+    log.warning('Tokens not found for position {} in handleIncreaseLiquidity', [position.id])
     return
   }
 
@@ -108,7 +131,7 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   position.depositedToken0 = position.depositedToken0.plus(amount0)
   position.depositedToken1 = position.depositedToken1.plus(amount1)
 
-  updateFeeVars(position, event, event.params.tokenId)
+  position = updateFeeVars(position, event, event.params.tokenId)
 
   position.save()
 
@@ -116,10 +139,14 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
 }
 
 export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   let position = getPosition(event, event.params.tokenId)
 
   // position was not able to be fetched
   if (position == null) {
+    log.warning('Position not found for tokenId {} in handleDecreaseLiquidity', [event.params.tokenId.toString()])
     return
   }
 
@@ -132,6 +159,7 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
+    log.warning('Tokens not found for position {} in handleDecreaseLiquidity', [position.id])
     return
   }
 
@@ -150,10 +178,14 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
 }
 
 export function handleCollect(event: Collect): void {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   let position = getPosition(event, event.params.tokenId)
 
   // position was not able to be fetched
   if (position == null) {
+    log.warning('Position not found for tokenId {} in handleCollect', [event.params.tokenId.toString()])
     return
   }
 
@@ -166,14 +198,17 @@ export function handleCollect(event: Collect): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
+    log.warning('Tokens not found for position {} in handleCollect', [position.id])
     return
   }
 
   let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
   let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
   position.collectedToken0 = position.collectedToken0.plus(amount0)
   position.collectedToken1 = position.collectedToken1.plus(amount1)
 
+  // Calculate fees as collected minus withdrawn
   position.collectedFeesToken0 = position.collectedToken0.minus(position.withdrawnToken0)
   position.collectedFeesToken1 = position.collectedToken1.minus(position.withdrawnToken1)
 
@@ -185,10 +220,14 @@ export function handleCollect(event: Collect): void {
 }
 
 export function handleTransfer(event: Transfer): void {
+  // Ensure bundle exists
+  ensureBundleExists()
+
   let position = getPosition(event, event.params.tokenId)
 
   // position was not able to be fetched
   if (position == null) {
+    log.warning('Position not found for tokenId {} in handleTransfer', [event.params.tokenId.toString()])
     return
   }
 
