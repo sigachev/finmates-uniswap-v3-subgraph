@@ -89,39 +89,23 @@ export function handlePoolCreated(event: PoolCreated): void {
     token0.poolCount = ZERO_BI
     token0.whitelistPools = []
 
-    // Try to fetch actual values (may fail for some tokens)
-    try {
-      let symbol = fetchTokenSymbol(event.params.token0)
-      if (symbol != 'unknown' && symbol.length > 0) {
-        token0.symbol = symbol
-      }
-    } catch (e) {
-      log.warning('Failed to fetch symbol for token0 {}: {}', [event.params.token0.toHexString(), e.toString()])
+    // Fetch actual values without try-catch
+    let symbol = fetchTokenSymbol(event.params.token0)
+    if (symbol != 'unknown' && symbol.length > 0) {
+      token0.symbol = symbol
     }
 
-    try {
-      let name = fetchTokenName(event.params.token0)
-      if (name != 'unknown' && name.length > 0) {
-        token0.name = name
-      }
-    } catch (e) {
-      log.warning('Failed to fetch name for token0 {}: {}', [event.params.token0.toHexString(), e.toString()])
+    let name = fetchTokenName(event.params.token0)
+    if (name != 'unknown' && name.length > 0) {
+      token0.name = name
     }
 
-    try {
-      let totalSupply = fetchTokenTotalSupply(event.params.token0)
-      token0.totalSupply = totalSupply
-    } catch (e) {
-      log.warning('Failed to fetch totalSupply for token0 {}: {}', [event.params.token0.toHexString(), e.toString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token0)
+    token0.totalSupply = totalSupply
 
-    try {
-      let decimals = fetchTokenDecimals(event.params.token0)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token0.decimals = decimals
-      }
-    } catch (e) {
-      log.warning('Failed to fetch decimals for token0 {}: {}', [event.params.token0.toHexString(), e.toString()])
+    let decimals = fetchTokenDecimals(event.params.token0)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token0.decimals = decimals
     }
 
     token0.save()
@@ -147,39 +131,23 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.poolCount = ZERO_BI
     token1.whitelistPools = []
 
-    // Try to fetch actual values (may fail for some tokens)
-    try {
-      let symbol = fetchTokenSymbol(event.params.token1)
-      if (symbol != 'unknown' && symbol.length > 0) {
-        token1.symbol = symbol
-      }
-    } catch (e) {
-      log.warning('Failed to fetch symbol for token1 {}: {}', [event.params.token1.toHexString(), e.toString()])
+    // Fetch actual values without try-catch
+    let symbol = fetchTokenSymbol(event.params.token1)
+    if (symbol != 'unknown' && symbol.length > 0) {
+      token1.symbol = symbol
     }
 
-    try {
-      let name = fetchTokenName(event.params.token1)
-      if (name != 'unknown' && name.length > 0) {
-        token1.name = name
-      }
-    } catch (e) {
-      log.warning('Failed to fetch name for token1 {}: {}', [event.params.token1.toHexString(), e.toString()])
+    let name = fetchTokenName(event.params.token1)
+    if (name != 'unknown' && name.length > 0) {
+      token1.name = name
     }
 
-    try {
-      let totalSupply = fetchTokenTotalSupply(event.params.token1)
-      token1.totalSupply = totalSupply
-    } catch (e) {
-      log.warning('Failed to fetch totalSupply for token1 {}: {}', [event.params.token1.toHexString(), e.toString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token1)
+    token1.totalSupply = totalSupply
 
-    try {
-      let decimals = fetchTokenDecimals(event.params.token1)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token1.decimals = decimals
-      }
-    } catch (e) {
-      log.warning('Failed to fetch decimals for token1 {}: {}', [event.params.token1.toHexString(), e.toString()])
+    let decimals = fetchTokenDecimals(event.params.token1)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token1.decimals = decimals
     }
 
     token1.save()
