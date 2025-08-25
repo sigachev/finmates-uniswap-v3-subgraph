@@ -40,7 +40,7 @@ export function fetchTokenSymbol(tokenAddress: Address): string {
         let foundNull = false
 
         for (let i = 2; i < hexString.length && !foundNull; i += 2) {
-          let byte = parseInt(hexString.substr(i, 2), 16)
+          let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
           if (byte === 0) {
             foundNull = true
           } else if (byte >= 32 && byte <= 126) { // printable ASCII
@@ -92,7 +92,7 @@ export function fetchTokenName(tokenAddress: Address): string {
         let foundNull = false
 
         for (let i = 2; i < hexString.length && !foundNull; i += 2) {
-          let byte = parseInt(hexString.substr(i, 2), 16)
+          let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
           if (byte === 0) {
             foundNull = true
           } else if (byte >= 32 && byte <= 126) { // printable ASCII

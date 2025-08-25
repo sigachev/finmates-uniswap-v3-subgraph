@@ -62,26 +62,16 @@ export function handleInitialize(event: Initialize): void {
   let token1 = Token.load(pool.token1)
 
   if (token0 !== null && token1 !== null && pool.sqrtPrice.gt(ZERO_BI)) {
-    try {
-      let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
-      pool.token0Price = prices[0]
-      pool.token1Price = prices[1]
-    } catch (e) {
-      log.warning('Failed to calculate initial prices for pool {}: {}', [pool.id, e.toString()])
-      pool.token0Price = ZERO_BD
-      pool.token1Price = ZERO_BD
-    }
+    let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
+    pool.token0Price = prices[0]
+    pool.token1Price = prices[1]
   }
 
   pool.save()
 
-  // Safe update of pool data
-  try {
-    updatePoolDayData(event)
-    updatePoolHourData(event)
-  } catch (e) {
-    log.error('Failed to update pool data in handleInitialize: {}', [e.toString()])
-  }
+  // Update pool data
+  updatePoolDayData(event)
+  updatePoolHourData(event)
 }
 
 export function handleMint(event: MintEvent): void {
