@@ -10,11 +10,8 @@ import { WHITELIST_TOKENS } from './../utils/pricing'
 
 // Initialize or load bundle - CRITICAL for preventing indexing failures
 function ensureBundleExists(): Bundle {
-  log.info('ensureBundleExists called', [])
-
   let bundle = Bundle.load('1')
   if (bundle === null) {
-    log.info('Creating new bundle with default ETH price', [])
     bundle = new Bundle('1')
     bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
     bundle.save()
@@ -22,7 +19,6 @@ function ensureBundleExists(): Bundle {
 
   // Always ensure we have a valid ETH price - never let it be zero
   if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
-    log.warning('Bundle ETH price was zero, resetting to default', [])
     bundle.ethPriceUSD = BigDecimal.fromString('2000')
     bundle.save()
   }
@@ -31,26 +27,15 @@ function ensureBundleExists(): Bundle {
 }
 
 export function handlePoolCreated(event: PoolCreated): void {
-  // Add detailed logging at the start
-  log.info('=== handlePoolCreated START ===', [])
-  log.info('Block: {}, TX: {}, Pool: {}', [
+  // Log for debugging
+  log.info('Processing PoolCreated at block {} tx {} for pool {}', [
     event.block.number.toString(),
     event.transaction.hash.toHexString(),
     event.params.pool.toHexString()
   ])
-  log.info('Token0: {}, Token1: {}, Fee: {}', [
-    event.params.token0.toHexString(),
-    event.params.token1.toHexString(),
-    event.params.fee.toString()
-  ])
 
   // CRITICAL: Ensure bundle exists before any operations
-  try {
-    ensureBundleExists()
-  } catch (e) {
-    log.error('Failed to ensure bundle exists: {}', [e.toString()])
-    return
-  }
+  ensureBundleExists()
 
   // Skip zero address tokens
   if (event.params.token0.toHexString() == '0x0000000000000000000000000000000000000000' ||
@@ -72,10 +57,8 @@ export function handlePoolCreated(event: PoolCreated): void {
   }
 
   // load factory (create if doesn't exist)
-  log.info('Loading factory', [])
   let factory = Factory.load(FACTORY_ADDRESS)
   if (factory === null) {
-    log.info('Creating new factory', [])
     factory = new Factory(FACTORY_ADDRESS)
     factory.poolCount = ZERO_BI
     factory.totalVolumeETH = ZERO_BD
@@ -95,15 +78,12 @@ export function handlePoolCreated(event: PoolCreated): void {
   factory.poolCount = factory.poolCount.plus(ONE_BI)
   factory.save()
 
-  log.info('Creating pool entity', [])
   let pool = new Pool(event.params.pool.toHexString()) as Pool
-
-  // Load or create token0
-  log.info('Processing token0: {}', [event.params.token0.toHexString()])
   let token0 = Token.load(event.params.token0.toHexString())
+  let token1 = Token.load(event.params.token1.toHexString())
 
+  // fetch info if null - with safe defaults
   if (token0 === null) {
-    log.info('Creating new token0 entity', [])
     token0 = new Token(event.params.token0.toHexString())
 
     // Set safe defaults first
@@ -124,57 +104,28 @@ export function handlePoolCreated(event: PoolCreated): void {
     token0.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    try {
-      log.info('Fetching token0 symbol', [])
-      let symbol = fetchTokenSymbol(event.params.token0)
-      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
-        token0.symbol = symbol
-        log.info('Token0 symbol: {}', [symbol])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token0 symbol: {}', [e.toString()])
+    let symbol = fetchTokenSymbol(event.params.token0)
+    if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+      token0.symbol = symbol
     }
 
-    try {
-      log.info('Fetching token0 name', [])
-      let name = fetchTokenName(event.params.token0)
-      if (name != 'unknown' && name.length > 0 && name.length < 100) {
-        token0.name = name
-        log.info('Token0 name: {}', [name])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token0 name: {}', [e.toString()])
+    let name = fetchTokenName(event.params.token0)
+    if (name != 'unknown' && name.length > 0 && name.length < 100) {
+      token0.name = name
     }
 
-    try {
-      log.info('Fetching token0 total supply', [])
-      let totalSupply = fetchTokenTotalSupply(event.params.token0)
-      token0.totalSupply = totalSupply
-    } catch (e) {
-      log.error('Failed to fetch token0 total supply: {}', [e.toString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token0)
+    token0.totalSupply = totalSupply
 
-    try {
-      log.info('Fetching token0 decimals', [])
-      let decimals = fetchTokenDecimals(event.params.token0)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token0.decimals = decimals
-        log.info('Token0 decimals: {}', [decimals.toString()])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token0 decimals: {}', [e.toString()])
+    let decimals = fetchTokenDecimals(event.params.token0)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token0.decimals = decimals
     }
 
     token0.save()
-    log.info('Token0 saved successfully', [])
   }
 
-  // Load or create token1
-  log.info('Processing token1: {}', [event.params.token1.toHexString()])
-  let token1 = Token.load(event.params.token1.toHexString())
-
   if (token1 === null) {
-    log.info('Creating new token1 entity', [])
     token1 = new Token(event.params.token1.toHexString())
 
     // Set safe defaults first
@@ -195,53 +146,28 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    try {
-      log.info('Fetching token1 symbol', [])
-      let symbol = fetchTokenSymbol(event.params.token1)
-      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
-        token1.symbol = symbol
-        log.info('Token1 symbol: {}', [symbol])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token1 symbol: {}', [e.toString()])
+    let symbol = fetchTokenSymbol(event.params.token1)
+    if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+      token1.symbol = symbol
     }
 
-    try {
-      log.info('Fetching token1 name', [])
-      let name = fetchTokenName(event.params.token1)
-      if (name != 'unknown' && name.length > 0 && name.length < 100) {
-        token1.name = name
-        log.info('Token1 name: {}', [name])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token1 name: {}', [e.toString()])
+    let name = fetchTokenName(event.params.token1)
+    if (name != 'unknown' && name.length > 0 && name.length < 100) {
+      token1.name = name
     }
 
-    try {
-      log.info('Fetching token1 total supply', [])
-      let totalSupply = fetchTokenTotalSupply(event.params.token1)
-      token1.totalSupply = totalSupply
-    } catch (e) {
-      log.error('Failed to fetch token1 total supply: {}', [e.toString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token1)
+    token1.totalSupply = totalSupply
 
-    try {
-      log.info('Fetching token1 decimals', [])
-      let decimals = fetchTokenDecimals(event.params.token1)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token1.decimals = decimals
-        log.info('Token1 decimals: {}', [decimals.toString()])
-      }
-    } catch (e) {
-      log.error('Failed to fetch token1 decimals: {}', [e.toString()])
+    let decimals = fetchTokenDecimals(event.params.token1)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token1.decimals = decimals
     }
 
     token1.save()
-    log.info('Token1 saved successfully', [])
   }
 
   // update white listed pools
-  log.info('Updating whitelisted pools', [])
   if (WHITELIST_TOKENS.includes(token0.id)) {
     let newPools = token1.whitelistPools
     newPools.push(pool.id)
@@ -256,7 +182,6 @@ export function handlePoolCreated(event: PoolCreated): void {
   }
 
   // Initialize pool with all required fields
-  log.info('Initializing pool fields', [])
   pool.token0 = token0.id
   pool.token1 = token1.id
   pool.feeTier = BigInt.fromI32(event.params.fee)
@@ -290,17 +215,14 @@ export function handlePoolCreated(event: PoolCreated): void {
   pool.tick = null
 
   pool.save()
-  log.info('Pool saved successfully', [])
 
   // create the tracked contract based on the template
-  log.info('Creating pool template', [])
   PoolTemplate.create(event.params.pool)
 
-  log.info('=== handlePoolCreated COMPLETE === Pool: {}, Token0: {} ({}), Token1: {} ({})', [
+  log.info('Successfully created pool {} with tokens {} and {} at block {}', [
     pool.id,
     token0.symbol,
-    token0.id,
     token1.symbol,
-    token1.id
+    event.block.number.toString()
   ])
 }
