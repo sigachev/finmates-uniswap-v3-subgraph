@@ -15,7 +15,11 @@ export let WHITELIST_TOKENS: string[] = [
   '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', // USDT
   '0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f', // WBTC
   '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', // DAI
-  '0xf97f4df75117a78c1a5a0dbb814af92458539fb4' // LINK
+  '0xf97f4df75117a78c1a5a0dbb814af92458539fb4', // LINK
+  '0x912ce59144191c1204e64559fe8253a0e49e6548', // ARB
+  '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // USDC (native)
+  '0x82af49447d8a07e3bd95bd0d56f35241523fbab1'.toLowerCase(), // WETH lowercase
+  '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8'.toLowerCase(), // USDC lowercase
 ]
 
 let MINIMUM_ETH_LOCKED = BigDecimal.fromString('0.01')
@@ -48,53 +52,72 @@ export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, t
     return [ZERO_BD, ZERO_BD]
   }
 
-  let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
-  let denom = BigDecimal.fromString(Q192)
+  try {
+    let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
+    let denom = BigDecimal.fromString(Q192)
 
-  // Ensure we have valid decimals with fallback to 18
-  let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
-  let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
+    // Ensure we have valid decimals with fallback to 18
+    let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
+    let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
 
-  // Validate decimals are reasonable
-  if (token0Decimals.gt(BigInt.fromI32(255)) || token1Decimals.gt(BigInt.fromI32(255))) {
-    log.warning('Token decimals exceed maximum, using 18', [])
-    token0Decimals = BigInt.fromI32(18)
-    token1Decimals = BigInt.fromI32(18)
+    // Validate decimals are reasonable
+    if (token0Decimals.gt(BigInt.fromI32(255)) || token1Decimals.gt(BigInt.fromI32(255))) {
+      log.warning('Token decimals exceed maximum, using 18', [])
+      token0Decimals = BigInt.fromI32(18)
+      token1Decimals = BigInt.fromI32(18)
+    }
+
+    let price1 = num
+      .div(denom)
+      .times(exponentToBigDecimal(token0Decimals))
+      .div(exponentToBigDecimal(token1Decimals))
+
+    // Safe division with check
+    let price0 = price1.equals(ZERO_BD) ? ZERO_BD : safeDiv(ONE_BD, price1)
+
+    // Sanity check prices
+    if (price0.gt(BigDecimal.fromString('1e20')) || price1.gt(BigDecimal.fromString('1e20'))) {
+      log.warning('Calculated prices seem unreasonably high, returning zero', [])
+      return [ZERO_BD, ZERO_BD]
+    }
+
+    return [price0, price1]
+  } catch (e) {
+    log.warning('Error calculating prices from sqrtPriceX96', [])
+    return [ZERO_BD, ZERO_BD]
   }
-
-  let price1 = num
-    .div(denom)
-    .times(exponentToBigDecimal(token0Decimals))
-    .div(exponentToBigDecimal(token1Decimals))
-
-  // Safe division with check
-  let price0 = price1.equals(ZERO_BD) ? ZERO_BD : safeDiv(ONE_BD, price1)
-
-  return [price0, price1]
 }
 
 export function getEthPriceInUSD(): BigDecimal {
   // Ensure bundle exists first
   let bundle = ensureBundleExists()
 
-  // fetch eth prices for each stablecoin
-  let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
+  try {
+    // fetch eth prices for each stablecoin
+    let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
 
-  if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
-    let token0 = Token.load(usdcPool.token0)
-    let token1 = Token.load(usdcPool.token1)
+    if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
+      let token0 = Token.load(usdcPool.token0)
+      let token1 = Token.load(usdcPool.token1)
 
-    if (token0 !== null && token1 !== null) {
-      let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
-      // USDC is token1, so we want token1Price which is ETH/USDC
-      if (prices[1].gt(ZERO_BD) && prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check
-        return prices[1]
+      if (token0 !== null && token1 !== null) {
+        let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
+        // USDC is token1, so we want token1Price which is ETH/USDC
+        if (prices[1].gt(ZERO_BD) &&
+          prices[1].gt(BigDecimal.fromString('100')) &&
+          prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check: ETH should be between $100-$100k
+          return prices[1]
+        }
       }
     }
+  } catch (e) {
+    log.warning('Error fetching ETH price from pool', [])
   }
 
   // Return the existing bundle price or default
-  if (!bundle.ethPriceUSD.equals(ZERO_BD)) {
+  if (!bundle.ethPriceUSD.equals(ZERO_BD) &&
+    bundle.ethPriceUSD.gt(BigDecimal.fromString('100')) &&
+    bundle.ethPriceUSD.lt(BigDecimal.fromString('100000'))) {
     return bundle.ethPriceUSD
   }
 
@@ -108,7 +131,7 @@ export function getEthPriceInUSD(): BigDecimal {
  * @todo update to be derived ETH (add stablecoin estimates)
  **/
 export function findEthPerToken(token: Token): BigDecimal {
-  if (token.id == WETH_ADDRESS) {
+  if (token.id == WETH_ADDRESS || token.id == WETH_ADDRESS.toLowerCase()) {
     return ONE_BD
   }
 
@@ -142,7 +165,11 @@ export function findEthPerToken(token: Token): BigDecimal {
         if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(MINIMUM_ETH_LOCKED)) {
           largestLiquidityETH = ethLocked
           // token1 per our token * Eth per token1
-          priceSoFar = pool.token1Price.times(token1.derivedETH as BigDecimal)
+          let calculatedPrice = pool.token1Price.times(token1.derivedETH as BigDecimal)
+          // Sanity check
+          if (calculatedPrice.lt(BigDecimal.fromString('1000000'))) {
+            priceSoFar = calculatedPrice
+          }
         }
       }
       if (pool.token1 == token.id) {
@@ -155,7 +182,11 @@ export function findEthPerToken(token: Token): BigDecimal {
         if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(MINIMUM_ETH_LOCKED)) {
           largestLiquidityETH = ethLocked
           // token0 per our token * ETH per token0
-          priceSoFar = pool.token0Price.times(token0.derivedETH as BigDecimal)
+          let calculatedPrice = pool.token0Price.times(token0.derivedETH as BigDecimal)
+          // Sanity check
+          if (calculatedPrice.lt(BigDecimal.fromString('1000000'))) {
+            priceSoFar = calculatedPrice
+          }
         }
       }
     }
@@ -187,18 +218,28 @@ export function getTrackedAmountUSD(
   let price0USD = token0.derivedETH.times(bundle.ethPriceUSD)
   let price1USD = token1.derivedETH.times(bundle.ethPriceUSD)
 
+  // Sanity check prices
+  if (price0USD.gt(BigDecimal.fromString('1000000')) || price1USD.gt(BigDecimal.fromString('1000000'))) {
+    log.warning('USD prices seem too high, skipping tracking', [])
+    return ZERO_BD
+  }
+
+  // Check both lowercase and regular addresses
+  let token0Whitelisted = WHITELIST_TOKENS.includes(token0.id) || WHITELIST_TOKENS.includes(token0.id.toLowerCase())
+  let token1Whitelisted = WHITELIST_TOKENS.includes(token1.id) || WHITELIST_TOKENS.includes(token1.id.toLowerCase())
+
   // both are whitelist tokens, return sum of both amounts
-  if (WHITELIST_TOKENS.includes(token0.id) && WHITELIST_TOKENS.includes(token1.id)) {
+  if (token0Whitelisted && token1Whitelisted) {
     return tokenAmount0.times(price0USD).plus(tokenAmount1.times(price1USD))
   }
 
   // take double value of the whitelisted token amount
-  if (WHITELIST_TOKENS.includes(token0.id) && !WHITELIST_TOKENS.includes(token1.id)) {
+  if (token0Whitelisted && !token1Whitelisted) {
     return tokenAmount0.times(price0USD).times(BigDecimal.fromString('2'))
   }
 
   // take double value of the whitelisted token amount
-  if (!WHITELIST_TOKENS.includes(token0.id) && WHITELIST_TOKENS.includes(token1.id)) {
+  if (!token0Whitelisted && token1Whitelisted) {
     return tokenAmount1.times(price1USD).times(BigDecimal.fromString('2'))
   }
 

@@ -31,14 +31,28 @@ export function handlePoolCreated(event: PoolCreated): void {
   ensureBundleExists()
 
   // Log for debugging
-  log.info('Processing PoolCreated at block {} for pool {}', [
+  log.info('Processing PoolCreated at block {} tx {} for pool {}', [
     event.block.number.toString(),
+    event.transaction.hash.toHexString(),
     event.params.pool.toHexString()
   ])
 
-  // temp fix - skip problematic pool
-  if (event.params.pool == Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248')) {
-    log.warning('Skipping problematic pool: {}', [event.params.pool.toHexString()])
+  // Skip zero address tokens
+  if (event.params.token0.toHexString() == '0x0000000000000000000000000000000000000000' ||
+    event.params.token1.toHexString() == '0x0000000000000000000000000000000000000000') {
+    log.warning('Skipping pool with zero address token', [])
+    return
+  }
+
+  // List of problematic pools to skip
+  let problematicPools = [
+    '0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248',
+    // Add more problematic pools here as discovered
+  ]
+
+  // Skip if pool is in problematic list
+  if (problematicPools.includes(event.params.pool.toHexString())) {
+    log.warning('Skipping known problematic pool: {}', [event.params.pool.toHexString()])
     return
   }
 
@@ -89,23 +103,39 @@ export function handlePoolCreated(event: PoolCreated): void {
     token0.poolCount = ZERO_BI
     token0.whitelistPools = []
 
-    // Fetch actual values without try-catch
-    let symbol = fetchTokenSymbol(event.params.token0)
-    if (symbol != 'unknown' && symbol.length > 0) {
-      token0.symbol = symbol
+    // Fetch actual values with defensive programming
+    try {
+      let symbol = fetchTokenSymbol(event.params.token0)
+      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+        token0.symbol = symbol
+      }
+    } catch (e) {
+      log.warning('Failed to fetch symbol for token0 {}', [event.params.token0.toHexString()])
     }
 
-    let name = fetchTokenName(event.params.token0)
-    if (name != 'unknown' && name.length > 0) {
-      token0.name = name
+    try {
+      let name = fetchTokenName(event.params.token0)
+      if (name != 'unknown' && name.length > 0 && name.length < 100) {
+        token0.name = name
+      }
+    } catch (e) {
+      log.warning('Failed to fetch name for token0 {}', [event.params.token0.toHexString()])
     }
 
-    let totalSupply = fetchTokenTotalSupply(event.params.token0)
-    token0.totalSupply = totalSupply
+    try {
+      let totalSupply = fetchTokenTotalSupply(event.params.token0)
+      token0.totalSupply = totalSupply
+    } catch (e) {
+      log.warning('Failed to fetch totalSupply for token0 {}', [event.params.token0.toHexString()])
+    }
 
-    let decimals = fetchTokenDecimals(event.params.token0)
-    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-      token0.decimals = decimals
+    try {
+      let decimals = fetchTokenDecimals(event.params.token0)
+      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+        token0.decimals = decimals
+      }
+    } catch (e) {
+      log.warning('Failed to fetch decimals for token0 {}, using default 18', [event.params.token0.toHexString()])
     }
 
     token0.save()
@@ -131,23 +161,39 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.poolCount = ZERO_BI
     token1.whitelistPools = []
 
-    // Fetch actual values without try-catch
-    let symbol = fetchTokenSymbol(event.params.token1)
-    if (symbol != 'unknown' && symbol.length > 0) {
-      token1.symbol = symbol
+    // Fetch actual values with defensive programming
+    try {
+      let symbol = fetchTokenSymbol(event.params.token1)
+      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+        token1.symbol = symbol
+      }
+    } catch (e) {
+      log.warning('Failed to fetch symbol for token1 {}', [event.params.token1.toHexString()])
     }
 
-    let name = fetchTokenName(event.params.token1)
-    if (name != 'unknown' && name.length > 0) {
-      token1.name = name
+    try {
+      let name = fetchTokenName(event.params.token1)
+      if (name != 'unknown' && name.length > 0 && name.length < 100) {
+        token1.name = name
+      }
+    } catch (e) {
+      log.warning('Failed to fetch name for token1 {}', [event.params.token1.toHexString()])
     }
 
-    let totalSupply = fetchTokenTotalSupply(event.params.token1)
-    token1.totalSupply = totalSupply
+    try {
+      let totalSupply = fetchTokenTotalSupply(event.params.token1)
+      token1.totalSupply = totalSupply
+    } catch (e) {
+      log.warning('Failed to fetch totalSupply for token1 {}', [event.params.token1.toHexString()])
+    }
 
-    let decimals = fetchTokenDecimals(event.params.token1)
-    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-      token1.decimals = decimals
+    try {
+      let decimals = fetchTokenDecimals(event.params.token1)
+      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+        token1.decimals = decimals
+      }
+    } catch (e) {
+      log.warning('Failed to fetch decimals for token1 {}, using default 18', [event.params.token1.toHexString()])
     }
 
     token1.save()
@@ -205,5 +251,10 @@ export function handlePoolCreated(event: PoolCreated): void {
   // create the tracked contract based on the template
   PoolTemplate.create(event.params.pool)
 
-  log.info('Successfully created pool {} at block {}', [pool.id, event.block.number.toString()])
+  log.info('Successfully created pool {} with tokens {} and {} at block {}', [
+    pool.id,
+    token0.symbol,
+    token1.symbol,
+    event.block.number.toString()
+  ])
 }

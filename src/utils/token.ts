@@ -18,44 +18,50 @@ export function fetchTokenSymbol(tokenAddress: Address): string {
     return staticTokenDefinition.symbol
   }
 
-  let contract = ERC20.bind(tokenAddress)
-  let contractSymbolBytes = ERC20SymbolBytes.bind(tokenAddress)
+  // Try to bind contract with defensive check
+  try {
+    let contract = ERC20.bind(tokenAddress)
+    let contractSymbolBytes = ERC20SymbolBytes.bind(tokenAddress)
 
-  // try types string and bytes32 for symbol
-  let symbolValue = 'unknown'
+    // try types string and bytes32 for symbol
+    let symbolValue = 'unknown'
 
-  // Try standard symbol() call first
-  let symbolResult = contract.try_symbol()
-  if (!symbolResult.reverted && symbolResult.value.length > 0) {
-    symbolValue = symbolResult.value
-  } else {
-    // Try bytes32 symbol
-    let symbolResultBytes = contractSymbolBytes.try_symbol()
-    if (!symbolResultBytes.reverted) {
-      // for broken pairs that have no symbol function exposed
-      if (!isNullEthValue(symbolResultBytes.value.toHexString())) {
-        // Convert bytes32 to string
-        let hexString = symbolResultBytes.value.toHexString()
-        let result = ''
-        let foundNull = false
+    // Try standard symbol() call first
+    let symbolResult = contract.try_symbol()
+    if (!symbolResult.reverted && symbolResult.value.length > 0) {
+      symbolValue = symbolResult.value
+    } else {
+      // Try bytes32 symbol
+      let symbolResultBytes = contractSymbolBytes.try_symbol()
+      if (!symbolResultBytes.reverted) {
+        // for broken pairs that have no symbol function exposed
+        if (!isNullEthValue(symbolResultBytes.value.toHexString())) {
+          // Convert bytes32 to string
+          let hexString = symbolResultBytes.value.toHexString()
+          let result = ''
+          let foundNull = false
 
-        for (let i = 2; i < hexString.length && !foundNull; i += 2) {
-          let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
-          if (byte === 0) {
-            foundNull = true
-          } else if (byte >= 32 && byte <= 126) { // printable ASCII
-            result += String.fromCharCode(byte)
+          for (let i = 2; i < hexString.length && !foundNull; i += 2) {
+            let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
+            if (byte === 0) {
+              foundNull = true
+            } else if (byte >= 32 && byte <= 126) { // printable ASCII
+              result += String.fromCharCode(byte)
+            }
           }
-        }
 
-        if (result.length > 0 && result.length < 32) {
-          symbolValue = result
+          if (result.length > 0 && result.length < 32) {
+            symbolValue = result
+          }
         }
       }
     }
-  }
 
-  return symbolValue
+    return symbolValue
+  } catch (e) {
+    log.warning('Error binding token contract for symbol: {}', [tokenAddress.toHexString()])
+    return 'UNKNOWN'
+  }
 }
 
 export function fetchTokenName(tokenAddress: Address): string {
@@ -70,44 +76,50 @@ export function fetchTokenName(tokenAddress: Address): string {
     return staticTokenDefinition.name
   }
 
-  let contract = ERC20.bind(tokenAddress)
-  let contractNameBytes = ERC20NameBytes.bind(tokenAddress)
+  // Try to bind contract with defensive check
+  try {
+    let contract = ERC20.bind(tokenAddress)
+    let contractNameBytes = ERC20NameBytes.bind(tokenAddress)
 
-  // try types string and bytes32 for name
-  let nameValue = 'unknown'
+    // try types string and bytes32 for name
+    let nameValue = 'unknown'
 
-  // Try standard name() call first
-  let nameResult = contract.try_name()
-  if (!nameResult.reverted && nameResult.value.length > 0) {
-    nameValue = nameResult.value
-  } else {
-    // Try bytes32 name
-    let nameResultBytes = contractNameBytes.try_name()
-    if (!nameResultBytes.reverted) {
-      // for broken exchanges that have no name function exposed
-      if (!isNullEthValue(nameResultBytes.value.toHexString())) {
-        // Convert bytes32 to string
-        let hexString = nameResultBytes.value.toHexString()
-        let result = ''
-        let foundNull = false
+    // Try standard name() call first
+    let nameResult = contract.try_name()
+    if (!nameResult.reverted && nameResult.value.length > 0) {
+      nameValue = nameResult.value
+    } else {
+      // Try bytes32 name
+      let nameResultBytes = contractNameBytes.try_name()
+      if (!nameResultBytes.reverted) {
+        // for broken exchanges that have no name function exposed
+        if (!isNullEthValue(nameResultBytes.value.toHexString())) {
+          // Convert bytes32 to string
+          let hexString = nameResultBytes.value.toHexString()
+          let result = ''
+          let foundNull = false
 
-        for (let i = 2; i < hexString.length && !foundNull; i += 2) {
-          let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
-          if (byte === 0) {
-            foundNull = true
-          } else if (byte >= 32 && byte <= 126) { // printable ASCII
-            result += String.fromCharCode(byte)
+          for (let i = 2; i < hexString.length && !foundNull; i += 2) {
+            let byte = i32(parseInt(hexString.substr(i, 2), 16))  // Explicit cast to i32
+            if (byte === 0) {
+              foundNull = true
+            } else if (byte >= 32 && byte <= 126) { // printable ASCII
+              result += String.fromCharCode(byte)
+            }
           }
-        }
 
-        if (result.length > 0 && result.length < 32) {
-          nameValue = result
+          if (result.length > 0 && result.length < 32) {
+            nameValue = result
+          }
         }
       }
     }
-  }
 
-  return nameValue
+    return nameValue
+  } catch (e) {
+    log.warning('Error binding token contract for name: {}', [tokenAddress.toHexString()])
+    return 'Unknown Token'
+  }
 }
 
 export function fetchTokenTotalSupply(tokenAddress: Address): BigInt {
@@ -116,15 +128,20 @@ export function fetchTokenTotalSupply(tokenAddress: Address): BigInt {
     return BigInt.fromI32(0)
   }
 
-  let contract = ERC20.bind(tokenAddress)
-  let totalSupplyResult = contract.try_totalSupply()
+  try {
+    let contract = ERC20.bind(tokenAddress)
+    let totalSupplyResult = contract.try_totalSupply()
 
-  if (!totalSupplyResult.reverted) {
-    return totalSupplyResult.value
+    if (!totalSupplyResult.reverted) {
+      return totalSupplyResult.value
+    }
+
+    log.warning('Failed to fetch total supply for token {}', [tokenAddress.toHexString()])
+    return BigInt.fromI32(0)
+  } catch (e) {
+    log.warning('Error binding token contract for totalSupply: {}', [tokenAddress.toHexString()])
+    return BigInt.fromI32(0)
   }
-
-  log.warning('Failed to fetch total supply for token {}', [tokenAddress.toHexString()])
-  return BigInt.fromI32(0)
 }
 
 export function fetchTokenDecimals(tokenAddress: Address): BigInt {
@@ -139,17 +156,24 @@ export function fetchTokenDecimals(tokenAddress: Address): BigInt {
     return staticTokenDefinition.decimals
   }
 
-  let contract = ERC20.bind(tokenAddress)
-  let decimalResult = contract.try_decimals()
+  try {
+    let contract = ERC20.bind(tokenAddress)
+    let decimalResult = contract.try_decimals()
 
-  if (!decimalResult.reverted) {
-    let decimals = decimalResult.value
-    // Validate decimals are reasonable (0-255)
-    if (decimals >= 0 && decimals <= 255) {
-      return BigInt.fromI32(decimals)
-    } else {
-      log.warning('Invalid decimals {} for token {}, defaulting to 18', [decimals.toString(), tokenAddress.toHexString()])
+    if (!decimalResult.reverted) {
+      let decimals = decimalResult.value
+      // Validate decimals are reasonable (0-255)
+      if (decimals >= 0 && decimals <= 255) {
+        return BigInt.fromI32(decimals)
+      } else {
+        log.warning('Invalid decimals {} for token {}, defaulting to 18', [
+          decimals.toString(),
+          tokenAddress.toHexString()
+        ])
+      }
     }
+  } catch (e) {
+    log.warning('Error binding token contract for decimals: {}', [tokenAddress.toHexString()])
   }
 
   // Default to 18 decimals if we can't fetch them

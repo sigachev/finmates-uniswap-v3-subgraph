@@ -22,7 +22,7 @@ services:
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
       # Add these new lines here:
       GRAPH_ETHEREUM_REQUEST_RETRIES: 10
-      GRAPH_ETHEREUM_POLLING_INTERVAL: 500
+      GRAPH_ETHEREUM_POLLING_INTERVAL: 450
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: true
     networks:
       - graph-network

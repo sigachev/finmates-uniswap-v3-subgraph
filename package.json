@@ -15,7 +15,6 @@
     "watch-local": "graph deploy finmates/uniswap-v3 --watch --node http://127.0.0.1:8020/ --ipfs http://localhost:5001"
   },
   "devDependencies": {
-    "@graphprotocol/graph-cli": "^0.97.1",
     "@graphprotocol/graph-ts": "^0.38.1",
     "@typescript-eslint/eslint-plugin": "^8.40.0",
     "@typescript-eslint/parser": "^8.40.0",

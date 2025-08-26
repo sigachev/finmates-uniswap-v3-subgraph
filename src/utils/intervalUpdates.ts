@@ -96,7 +96,29 @@ export function updatePoolDayData(event: ethereum.Event): PoolDayData {
 
   if (!pool) {
     log.error('Pool not found in updatePoolDayData: {}', [event.address.toHexString()])
-    throw new Error('Pool not found')
+    // Create a stub pool day data to prevent crashes
+    let poolDayData = new PoolDayData(dayPoolID)
+    poolDayData.date = dayStartTimestamp
+    poolDayData.pool = event.address.toHexString()
+    poolDayData.volumeToken0 = ZERO_BD
+    poolDayData.volumeToken1 = ZERO_BD
+    poolDayData.volumeUSD = ZERO_BD
+    poolDayData.feesUSD = ZERO_BD
+    poolDayData.txCount = ZERO_BI
+    poolDayData.feeGrowthGlobal0X128 = ZERO_BI
+    poolDayData.feeGrowthGlobal1X128 = ZERO_BI
+    poolDayData.open = ZERO_BD
+    poolDayData.high = ZERO_BD
+    poolDayData.low = ZERO_BD
+    poolDayData.close = ZERO_BD
+    poolDayData.liquidity = ZERO_BI
+    poolDayData.sqrtPrice = ZERO_BI
+    poolDayData.token0Price = ZERO_BD
+    poolDayData.token1Price = ZERO_BD
+    poolDayData.tick = null
+    poolDayData.tvlUSD = ZERO_BD
+    poolDayData.save()
+    return poolDayData
   }
 
   let poolDayData = PoolDayData.load(dayPoolID)
@@ -151,7 +173,29 @@ export function updatePoolHourData(event: ethereum.Event): PoolHourData {
 
   if (!pool) {
     log.error('Pool not found in updatePoolHourData: {}', [event.address.toHexString()])
-    throw new Error('Pool not found')
+    // Create a stub pool hour data to prevent crashes
+    let poolHourData = new PoolHourData(hourPoolID)
+    poolHourData.periodStartUnix = hourStartUnix
+    poolHourData.pool = event.address.toHexString()
+    poolHourData.volumeToken0 = ZERO_BD
+    poolHourData.volumeToken1 = ZERO_BD
+    poolHourData.volumeUSD = ZERO_BD
+    poolHourData.txCount = ZERO_BI
+    poolHourData.feesUSD = ZERO_BD
+    poolHourData.feeGrowthGlobal0X128 = ZERO_BI
+    poolHourData.feeGrowthGlobal1X128 = ZERO_BI
+    poolHourData.open = ZERO_BD
+    poolHourData.high = ZERO_BD
+    poolHourData.low = ZERO_BD
+    poolHourData.close = ZERO_BD
+    poolHourData.liquidity = ZERO_BI
+    poolHourData.sqrtPrice = ZERO_BI
+    poolHourData.token0Price = ZERO_BD
+    poolHourData.token1Price = ZERO_BD
+    poolHourData.tick = null
+    poolHourData.tvlUSD = ZERO_BD
+    poolHourData.save()
+    return poolHourData
   }
 
   let poolHourData = PoolHourData.load(hourPoolID)
@@ -205,7 +249,18 @@ export function updateTokenDayData(token: Token, event: ethereum.Event): TokenDa
     .toString()
     .concat('-')
     .concat(dayID.toString())
-  let tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
+
+  // Calculate safe token price
+  let tokenPrice = ZERO_BD
+  try {
+    tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
+    // Sanity check
+    if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
+      tokenPrice = ZERO_BD
+    }
+  } catch (e) {
+    log.warning('Error calculating token price for {}: {}', [token.id, e.toString()])
+  }
 
   let tokenDayData = TokenDayData.load(tokenDayID)
   if (tokenDayData === null) {
@@ -226,12 +281,12 @@ export function updateTokenDayData(token: Token, event: ethereum.Event): TokenDa
     tokenDayData.high = tokenPrice
   }
 
-  if (tokenPrice.lt(tokenDayData.low)) {
+  if (tokenPrice.lt(tokenDayData.low) && tokenPrice.gt(ZERO_BD)) {
     tokenDayData.low = tokenPrice
   }
 
   tokenDayData.close = tokenPrice
-  tokenDayData.priceUSD = token.derivedETH.times(bundle.ethPriceUSD)
+  tokenDayData.priceUSD = tokenPrice
   tokenDayData.totalValueLocked = token.totalValueLocked
   tokenDayData.totalValueLockedUSD = token.totalValueLockedUSD
   tokenDayData.save()
@@ -249,8 +304,20 @@ export function updateTokenHourData(token: Token, event: ethereum.Event): TokenH
     .toString()
     .concat('-')
     .concat(hourIndex.toString())
+
+  // Calculate safe token price
+  let tokenPrice = ZERO_BD
+  try {
+    tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
+    // Sanity check
+    if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
+      tokenPrice = ZERO_BD
+    }
+  } catch (e) {
+    log.warning('Error calculating token price for {}: {}', [token.id, e.toString()])
+  }
+
   let tokenHourData = TokenHourData.load(tokenHourID)
-  let tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
 
   if (tokenHourData === null) {
     tokenHourData = new TokenHourData(tokenHourID)
@@ -270,7 +337,7 @@ export function updateTokenHourData(token: Token, event: ethereum.Event): TokenH
     tokenHourData.high = tokenPrice
   }
 
-  if (tokenPrice.lt(tokenHourData.low)) {
+  if (tokenPrice.lt(tokenHourData.low) && tokenPrice.gt(ZERO_BD)) {
     tokenHourData.low = tokenPrice
   }
 
