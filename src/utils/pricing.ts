@@ -52,66 +52,57 @@ export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, t
     return [ZERO_BD, ZERO_BD]
   }
 
-  try {
-    let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
-    let denom = BigDecimal.fromString(Q192)
+  let num = sqrtPriceX96.times(sqrtPriceX96).toBigDecimal()
+  let denom = BigDecimal.fromString(Q192)
 
-    // Ensure we have valid decimals with fallback to 18
-    let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
-    let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
+  // Ensure we have valid decimals with fallback to 18
+  let token0Decimals = token0.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token0.decimals
+  let token1Decimals = token1.decimals.equals(ZERO_BI) ? BigInt.fromI32(18) : token1.decimals
 
-    // Validate decimals are reasonable
-    if (token0Decimals.gt(BigInt.fromI32(255)) || token1Decimals.gt(BigInt.fromI32(255))) {
-      log.warning('Token decimals exceed maximum, using 18', [])
-      token0Decimals = BigInt.fromI32(18)
-      token1Decimals = BigInt.fromI32(18)
-    }
+  // Validate decimals are reasonable
+  if (token0Decimals.gt(BigInt.fromI32(255)) || token1Decimals.gt(BigInt.fromI32(255))) {
+    log.warning('Token decimals exceed maximum, using 18', [])
+    token0Decimals = BigInt.fromI32(18)
+    token1Decimals = BigInt.fromI32(18)
+  }
 
-    let price1 = num
-      .div(denom)
-      .times(exponentToBigDecimal(token0Decimals))
-      .div(exponentToBigDecimal(token1Decimals))
+  let price1 = num
+    .div(denom)
+    .times(exponentToBigDecimal(token0Decimals))
+    .div(exponentToBigDecimal(token1Decimals))
 
-    // Safe division with check
-    let price0 = price1.equals(ZERO_BD) ? ZERO_BD : safeDiv(ONE_BD, price1)
+  // Safe division with check
+  let price0 = price1.equals(ZERO_BD) ? ZERO_BD : safeDiv(ONE_BD, price1)
 
-    // Sanity check prices
-    if (price0.gt(BigDecimal.fromString('1e20')) || price1.gt(BigDecimal.fromString('1e20'))) {
-      log.warning('Calculated prices seem unreasonably high, returning zero', [])
-      return [ZERO_BD, ZERO_BD]
-    }
-
-    return [price0, price1]
-  } catch (e) {
-    log.warning('Error calculating prices from sqrtPriceX96', [])
+  // Sanity check prices
+  if (price0.gt(BigDecimal.fromString('1e20')) || price1.gt(BigDecimal.fromString('1e20'))) {
+    log.warning('Calculated prices seem unreasonably high, returning zero', [])
     return [ZERO_BD, ZERO_BD]
   }
+
+  return [price0, price1]
 }
 
 export function getEthPriceInUSD(): BigDecimal {
   // Ensure bundle exists first
   let bundle = ensureBundleExists()
 
-  try {
-    // fetch eth prices for each stablecoin
-    let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
+  // fetch eth prices for each stablecoin
+  let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
 
-    if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
-      let token0 = Token.load(usdcPool.token0)
-      let token1 = Token.load(usdcPool.token1)
+  if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
+    let token0 = Token.load(usdcPool.token0)
+    let token1 = Token.load(usdcPool.token1)
 
-      if (token0 !== null && token1 !== null) {
-        let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
-        // USDC is token1, so we want token1Price which is ETH/USDC
-        if (prices[1].gt(ZERO_BD) &&
-          prices[1].gt(BigDecimal.fromString('100')) &&
-          prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check: ETH should be between $100-$100k
-          return prices[1]
-        }
+    if (token0 !== null && token1 !== null) {
+      let prices = sqrtPriceX96ToTokenPrices(usdcPool.sqrtPrice, token0, token1)
+      // USDC is token1, so we want token1Price which is ETH/USDC
+      if (prices[1].gt(ZERO_BD) &&
+        prices[1].gt(BigDecimal.fromString('100')) &&
+        prices[1].lt(BigDecimal.fromString('100000'))) { // Sanity check: ETH should be between $100-$100k
+        return prices[1]
       }
     }
-  } catch (e) {
-    log.warning('Error fetching ETH price from pool', [])
   }
 
   // Return the existing bundle price or default

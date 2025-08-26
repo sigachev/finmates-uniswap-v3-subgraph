@@ -104,38 +104,22 @@ export function handlePoolCreated(event: PoolCreated): void {
     token0.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    try {
-      let symbol = fetchTokenSymbol(event.params.token0)
-      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
-        token0.symbol = symbol
-      }
-    } catch (e) {
-      log.warning('Failed to fetch symbol for token0 {}', [event.params.token0.toHexString()])
+    let symbol = fetchTokenSymbol(event.params.token0)
+    if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+      token0.symbol = symbol
     }
 
-    try {
-      let name = fetchTokenName(event.params.token0)
-      if (name != 'unknown' && name.length > 0 && name.length < 100) {
-        token0.name = name
-      }
-    } catch (e) {
-      log.warning('Failed to fetch name for token0 {}', [event.params.token0.toHexString()])
+    let name = fetchTokenName(event.params.token0)
+    if (name != 'unknown' && name.length > 0 && name.length < 100) {
+      token0.name = name
     }
 
-    try {
-      let totalSupply = fetchTokenTotalSupply(event.params.token0)
-      token0.totalSupply = totalSupply
-    } catch (e) {
-      log.warning('Failed to fetch totalSupply for token0 {}', [event.params.token0.toHexString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token0)
+    token0.totalSupply = totalSupply
 
-    try {
-      let decimals = fetchTokenDecimals(event.params.token0)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token0.decimals = decimals
-      }
-    } catch (e) {
-      log.warning('Failed to fetch decimals for token0 {}, using default 18', [event.params.token0.toHexString()])
+    let decimals = fetchTokenDecimals(event.params.token0)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token0.decimals = decimals
     }
 
     token0.save()
@@ -162,38 +146,22 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    try {
-      let symbol = fetchTokenSymbol(event.params.token1)
-      if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
-        token1.symbol = symbol
-      }
-    } catch (e) {
-      log.warning('Failed to fetch symbol for token1 {}', [event.params.token1.toHexString()])
+    let symbol = fetchTokenSymbol(event.params.token1)
+    if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
+      token1.symbol = symbol
     }
 
-    try {
-      let name = fetchTokenName(event.params.token1)
-      if (name != 'unknown' && name.length > 0 && name.length < 100) {
-        token1.name = name
-      }
-    } catch (e) {
-      log.warning('Failed to fetch name for token1 {}', [event.params.token1.toHexString()])
+    let name = fetchTokenName(event.params.token1)
+    if (name != 'unknown' && name.length > 0 && name.length < 100) {
+      token1.name = name
     }
 
-    try {
-      let totalSupply = fetchTokenTotalSupply(event.params.token1)
-      token1.totalSupply = totalSupply
-    } catch (e) {
-      log.warning('Failed to fetch totalSupply for token1 {}', [event.params.token1.toHexString()])
-    }
+    let totalSupply = fetchTokenTotalSupply(event.params.token1)
+    token1.totalSupply = totalSupply
 
-    try {
-      let decimals = fetchTokenDecimals(event.params.token1)
-      if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
-        token1.decimals = decimals
-      }
-    } catch (e) {
-      log.warning('Failed to fetch decimals for token1 {}, using default 18', [event.params.token1.toHexString()])
+    let decimals = fetchTokenDecimals(event.params.token1)
+    if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
+      token1.decimals = decimals
     }
 
     token1.save()

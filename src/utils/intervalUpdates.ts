@@ -252,14 +252,10 @@ export function updateTokenDayData(token: Token, event: ethereum.Event): TokenDa
 
   // Calculate safe token price
   let tokenPrice = ZERO_BD
-  try {
-    tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
-    // Sanity check
-    if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
-      tokenPrice = ZERO_BD
-    }
-  } catch (e) {
-    log.warning('Error calculating token price for {}: {}', [token.id, e.toString()])
+  tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
+  // Sanity check
+  if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
+    tokenPrice = ZERO_BD
   }
 
   let tokenDayData = TokenDayData.load(tokenDayID)
@@ -307,14 +303,10 @@ export function updateTokenHourData(token: Token, event: ethereum.Event): TokenH
 
   // Calculate safe token price
   let tokenPrice = ZERO_BD
-  try {
-    tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
-    // Sanity check
-    if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
-      tokenPrice = ZERO_BD
-    }
-  } catch (e) {
-    log.warning('Error calculating token price for {}: {}', [token.id, e.toString()])
+  tokenPrice = token.derivedETH.times(bundle.ethPriceUSD)
+  // Sanity check
+  if (tokenPrice.gt(BigDecimal.fromString('1000000'))) {
+    tokenPrice = ZERO_BD
   }
 
   let tokenHourData = TokenHourData.load(tokenHourID)
