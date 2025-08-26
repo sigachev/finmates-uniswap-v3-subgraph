@@ -18,12 +18,19 @@ services:
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
       ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB'
-      GRAPH_LOG: info
+      # Enhanced logging
+      GRAPH_LOG: debug
+      RUST_LOG: debug,hyper=error,web3=trace
+      GRAPH_LOG_QUERY_TIMING: gql
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
-      # Add these new lines here:
       GRAPH_ETHEREUM_REQUEST_RETRIES: 10
       GRAPH_ETHEREUM_POLLING_INTERVAL: 450
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: true
+      # Additional debug settings
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 1
+      GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 1
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 10
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 10
     networks:
       - graph-network
 
