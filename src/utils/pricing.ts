@@ -87,9 +87,17 @@ export function getEthPriceInUSD(): BigDecimal {
   // Ensure bundle exists first
   let bundle = ensureBundleExists()
 
+  // If we already have a price, return it (avoid circular dependencies)
+  if (bundle.ethPriceUSD.gt(ZERO_BD) &&
+    bundle.ethPriceUSD.gt(BigDecimal.fromString('100')) &&
+    bundle.ethPriceUSD.lt(BigDecimal.fromString('100000'))) {
+    return bundle.ethPriceUSD
+  }
+
   // fetch eth prices for each stablecoin
   let usdcPool = Pool.load(USDC_WETH_03_POOL) // usdc is token1
 
+  // Check if pool exists and is initialized
   if (usdcPool !== null && usdcPool.liquidity.gt(ZERO_BI) && usdcPool.sqrtPrice.gt(ZERO_BI)) {
     let token0 = Token.load(usdcPool.token0)
     let token1 = Token.load(usdcPool.token1)
@@ -106,15 +114,8 @@ export function getEthPriceInUSD(): BigDecimal {
   }
 
   // Return the existing bundle price or default
-  if (!bundle.ethPriceUSD.equals(ZERO_BD) &&
-    bundle.ethPriceUSD.gt(BigDecimal.fromString('100')) &&
-    bundle.ethPriceUSD.lt(BigDecimal.fromString('100000'))) {
-    return bundle.ethPriceUSD
-  }
-
-  // Return a default ETH price if we can't calculate it yet
-  // This is a reasonable estimate for Arbitrum ETH price
-  return BigDecimal.fromString('2000')
+  // This prevents circular dependencies when called during pool initialization
+  return bundle.ethPriceUSD
 }
 
 /**
@@ -141,6 +142,12 @@ export function findEthPerToken(token: Token): BigDecimal {
 
     if (pool === null) {
       log.warning('Pool not found in findEthPerToken: {}', [poolAddress])
+      continue
+    }
+
+    // Check if pool is initialized
+    if (pool.sqrtPrice.equals(ZERO_BI)) {
+      log.warning('Pool not initialized in findEthPerToken: {}', [poolAddress])
       continue
     }
 

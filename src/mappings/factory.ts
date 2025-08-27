@@ -167,18 +167,22 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.save()
   }
 
-  // update white listed pools
-  if (WHITELIST_TOKENS.includes(token0.id)) {
+  // update white listed pools with duplicate check
+  if (WHITELIST_TOKENS.includes(token0.id) || WHITELIST_TOKENS.includes(token0.id.toLowerCase())) {
     let newPools = token1.whitelistPools
-    newPools.push(pool.id)
-    token1.whitelistPools = newPools
-    token1.save()
+    if (!newPools.includes(pool.id)) {
+      newPools.push(pool.id)
+      token1.whitelistPools = newPools
+      token1.save()
+    }
   }
-  if (WHITELIST_TOKENS.includes(token1.id)) {
+  if (WHITELIST_TOKENS.includes(token1.id) || WHITELIST_TOKENS.includes(token1.id.toLowerCase())) {
     let newPools = token0.whitelistPools
-    newPools.push(pool.id)
-    token0.whitelistPools = newPools
-    token0.save()
+    if (!newPools.includes(pool.id)) {
+      newPools.push(pool.id)
+      token0.whitelistPools = newPools
+      token0.save()
+    }
   }
 
   // Initialize pool with all required fields

@@ -6,7 +6,7 @@ import {
   NonfungiblePositionManager,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, PositionSnapshot, Token, Bundle } from '../types/schema'
+import { Position, PositionSnapshot, Token, Bundle, Pool } from '../types/schema'
 import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI } from '../utils/constants'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { convertTokenToDecimal, loadTransaction } from '../utils'
@@ -42,6 +42,13 @@ function getPosition(event: ethereum.Event, tokenId: BigInt): Position | null {
     if (!positionCall.reverted) {
       let positionResult = positionCall.value
       let poolAddress = factoryContract.getPool(positionResult.value2, positionResult.value3, positionResult.value4)
+
+      // Check if pool exists
+      let pool = Pool.load(poolAddress.toHexString())
+      if (pool === null) {
+        log.warning('Pool does not exist for position {}, skipping', [tokenId.toString()])
+        return null
+      }
 
       position = new Position(tokenId.toString())
       // The owner gets correctly updated in the Transfer handler
@@ -121,6 +128,18 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
     return
   }
 
+  // Check if pool is initialized
+  let pool = Pool.load(position.pool)
+  if (pool === null) {
+    log.warning('Pool not found for position {} in handleIncreaseLiquidity', [position.id])
+    return
+  }
+
+  if (pool.sqrtPrice.equals(ZERO_BI)) {
+    log.warning('Pool not initialized for position {} in handleIncreaseLiquidity', [position.id])
+    return
+  }
+
   let token0 = Token.load(position.token0)
   let token1 = Token.load(position.token1)
 
@@ -160,6 +179,18 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
     return
   }
 
+  // Check if pool is initialized
+  let pool = Pool.load(position.pool)
+  if (pool === null) {
+    log.warning('Pool not found for position {} in handleDecreaseLiquidity', [position.id])
+    return
+  }
+
+  if (pool.sqrtPrice.equals(ZERO_BI)) {
+    log.warning('Pool not initialized for position {} in handleDecreaseLiquidity', [position.id])
+    return
+  }
+
   let token0 = Token.load(position.token0)
   let token1 = Token.load(position.token1)
 
@@ -196,6 +227,18 @@ export function handleCollect(event: Collect): void {
 
   // temp fix for problematic pools
   if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
+    return
+  }
+
+  // Check if pool is initialized
+  let pool = Pool.load(position.pool)
+  if (pool === null) {
+    log.warning('Pool not found for position {} in handleCollect', [position.id])
+    return
+  }
+
+  if (pool.sqrtPrice.equals(ZERO_BI)) {
+    log.warning('Pool not initialized for position {} in handleCollect', [position.id])
     return
   }
 
