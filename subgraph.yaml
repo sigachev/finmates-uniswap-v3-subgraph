@@ -13,7 +13,7 @@ dataSources:
       address: '0x1F98431c8aD98523631AE4a59f267346ea31F984'
       abi: Factory
       # Use actual Uniswap V3 deployment block on Arbitrum
-      startBlock: 165  # This is the correct deployment block
+      startBlock: 350000000  # This is the correct deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -42,7 +42,7 @@ dataSources:
     source:
       address: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
       abi: NonfungiblePositionManager
-      startBlock: 165  # Same as Factory
+      startBlock: 350000000  # Same as Factory
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
