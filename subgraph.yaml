@@ -1,5 +1,5 @@
 specVersion: 0.0.4
-description: Uniswap V3 on Arbitrum One
+description: Uniswap is a decentralized protocol for automated token exchange on Ethereum.
 repository: https://github.com/Uniswap/uniswap-v3-subgraph
 schema:
   file: ./schema.graphql
@@ -12,8 +12,8 @@ dataSources:
     source:
       address: '0x1F98431c8aD98523631AE4a59f267346ea31F984'
       abi: Factory
-      # Use actual Uniswap V3 deployment block on Arbitrum
-      startBlock: 350000000  # This is the correct deployment block
+      # Start from the actual deployment block of Uniswap V3 on Arbitrum
+      startBlock: 165
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -42,7 +42,8 @@ dataSources:
     source:
       address: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
       abi: NonfungiblePositionManager
-      startBlock: 350000000  # Same as Factory
+      # Start from the same block as Factory
+      startBlock: 165
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -51,6 +52,7 @@ dataSources:
       entities:
         - Pool
         - Token
+        - Position
       abis:
         - name: NonfungiblePositionManager
           file: ./abis/NonfungiblePositionManager.json
@@ -83,6 +85,7 @@ templates:
       entities:
         - Pool
         - Token
+        - Tick
       abis:
         - name: Pool
           file: ./abis/pool.json

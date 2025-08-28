@@ -6,10 +6,11 @@ import {
   NonfungiblePositionManager,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, PositionSnapshot, Token, Bundle, Pool } from '../types/schema'
-import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI } from '../utils/constants'
+import { Position, PositionSnapshot, Token, Bundle, Pool, Factory, Tick } from '../types/schema'
+import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI, FACTORY_ADDRESS } from '../utils/constants'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { convertTokenToDecimal, loadTransaction } from '../utils'
+import { createTick } from '../utils/tick'
 
 // Helper function to ensure bundle exists
 function ensureBundleExists(): Bundle {
@@ -29,52 +30,100 @@ function ensureBundleExists(): Bundle {
   return bundle as Bundle
 }
 
-function getPosition(event: ethereum.Event, tokenId: BigInt): Position | null {
-  let position = Position.load(tokenId.toString())
-  if (position === null) {
-    let contract = NonfungiblePositionManager.bind(event.address)
-    let positionCall = contract.try_positions(tokenId)
+// Track processed positions to avoid redundant calls
+let processedPositions = new Map<string, boolean>()
 
-    // the following call reverts in situations where the position is minted
-    // and deleted in the same block - from my investigation this happens
-    // in calls from  BancorSwap
-    // (e.g. 0xf7867fa19aa65298fadb8d4f72d0daed5e836f3ba01f0b9b9631cdc6c36bed40)
-    if (!positionCall.reverted) {
-      let positionResult = positionCall.value
-      let poolAddress = factoryContract.getPool(positionResult.value2, positionResult.value3, positionResult.value4)
+function getOrCreatePosition(event: ethereum.Event, tokenId: BigInt): Position | null {
+  let positionId = tokenId.toString()
 
-      // Check if pool exists
-      let pool = Pool.load(poolAddress.toHexString())
-      if (pool === null) {
-        log.warning('Pool does not exist for position {}, skipping', [tokenId.toString()])
-        return null
-      }
-
-      position = new Position(tokenId.toString())
-      // The owner gets correctly updated in the Transfer handler
-      position.owner = Address.fromString(ADDRESS_ZERO)
-      position.pool = poolAddress.toHexString()
-      position.token0 = positionResult.value2.toHexString()
-      position.token1 = positionResult.value3.toHexString()
-      position.tickLower = position.pool.concat('#').concat(positionResult.value5.toString())
-      position.tickUpper = position.pool.concat('#').concat(positionResult.value6.toString())
-      position.liquidity = ZERO_BI
-      position.depositedToken0 = ZERO_BD
-      position.depositedToken1 = ZERO_BD
-      position.withdrawnToken0 = ZERO_BD
-      position.withdrawnToken1 = ZERO_BD
-      position.collectedToken0 = ZERO_BD
-      position.collectedToken1 = ZERO_BD
-      position.collectedFeesToken0 = ZERO_BD
-      position.collectedFeesToken1 = ZERO_BD
-      position.transaction = loadTransaction(event).id
-      position.feeGrowthInside0LastX128 = positionResult.value8
-      position.feeGrowthInside1LastX128 = positionResult.value9
-    } else {
-      log.warning('Position call reverted for tokenId {}', [tokenId.toString()])
-      return null
-    }
+  // Check if position already exists
+  let position = Position.load(positionId)
+  if (position !== null) {
+    return position
   }
+
+  // Check if we've already tried to process this position in this event
+  if (processedPositions.has(positionId)) {
+    return null
+  }
+  processedPositions.set(positionId, true)
+
+  // Try to fetch position from contract
+  let contract = NonfungiblePositionManager.bind(event.address)
+  let positionCall = contract.try_positions(tokenId)
+
+  if (positionCall.reverted) {
+    // Position might have been burned or doesn't exist yet
+    log.warning('Position {} does not exist on-chain (may have been burned)', [positionId])
+    return null
+  }
+
+  let positionResult = positionCall.value
+
+  // Get pool address from factory
+  let poolAddress = factoryContract.getPool(
+    positionResult.value2,
+    positionResult.value3,
+    positionResult.value4
+  )
+
+  // Check if pool exists in our subgraph
+  let pool = Pool.load(poolAddress.toHexString())
+  if (pool === null) {
+    // This can happen if we're starting indexing after the pool was created
+    // Log it but don't try to create the pool retroactively
+    log.warning('Pool {} not found in subgraph for position {}. This pool may have been created before our indexing started.', [
+      poolAddress.toHexString(),
+      positionId
+    ])
+    return null
+  }
+
+  // Create the position
+  position = new Position(positionId)
+  position.owner = Address.fromString(ADDRESS_ZERO) // Will be updated in Transfer handler
+  position.pool = poolAddress.toHexString()
+  position.token0 = positionResult.value2.toHexString()
+  position.token1 = positionResult.value3.toHexString()
+
+  // Create tick references if they don't exist
+  let tickLowerId = position.pool.concat('#').concat(positionResult.value5.toString())
+  let tickUpperId = position.pool.concat('#').concat(positionResult.value6.toString())
+
+  let tickLower = Tick.load(tickLowerId)
+  if (tickLower === null) {
+    tickLower = createTick(tickLowerId, positionResult.value5.toI32(), position.pool, event)
+    tickLower.save()
+  }
+
+  let tickUpper = Tick.load(tickUpperId)
+  if (tickUpper === null) {
+    tickUpper = createTick(tickUpperId, positionResult.value6.toI32(), position.pool, event)
+    tickUpper.save()
+  }
+
+  position.tickLower = tickLowerId
+  position.tickUpper = tickUpperId
+  position.liquidity = positionResult.value7
+  position.depositedToken0 = ZERO_BD
+  position.depositedToken1 = ZERO_BD
+  position.withdrawnToken0 = ZERO_BD
+  position.withdrawnToken1 = ZERO_BD
+  position.collectedToken0 = ZERO_BD
+  position.collectedToken1 = ZERO_BD
+  position.collectedFeesToken0 = ZERO_BD
+  position.collectedFeesToken1 = ZERO_BD
+  position.transaction = loadTransaction(event).id
+  position.feeGrowthInside0LastX128 = positionResult.value8
+  position.feeGrowthInside1LastX128 = positionResult.value9
+
+  position.save()
+
+  log.info('Created position {} for pool {} at block {}', [
+    positionId,
+    poolAddress.toHexString(),
+    event.block.number.toString()
+  ])
 
   return position
 }
@@ -82,17 +131,20 @@ function getPosition(event: ethereum.Event, tokenId: BigInt): Position | null {
 function updateFeeVars(position: Position, event: ethereum.Event, tokenId: BigInt): Position {
   let positionManagerContract = NonfungiblePositionManager.bind(event.address)
   let positionResult = positionManagerContract.try_positions(tokenId)
+
   if (!positionResult.reverted) {
     position.feeGrowthInside0LastX128 = positionResult.value.value8
     position.feeGrowthInside1LastX128 = positionResult.value.value9
   } else {
-    log.warning('Error updating fee vars for position {}', [position.id])
+    log.warning('Error updating fee vars for position {} - position may have been burned', [position.id])
   }
+
   return position
 }
 
 function savePositionSnapshot(position: Position, event: ethereum.Event): void {
-  let positionSnapshot = new PositionSnapshot(position.id.concat('#').concat(event.block.number.toString()))
+  let snapshotId = position.id.concat('#').concat(event.block.number.toString())
+  let positionSnapshot = new PositionSnapshot(snapshotId)
   positionSnapshot.owner = position.owner
   positionSnapshot.pool = position.pool
   positionSnapshot.position = position.id
@@ -115,28 +167,31 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   // Ensure bundle exists
   ensureBundleExists()
 
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
+  let position = getOrCreatePosition(event, event.params.tokenId)
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleIncreaseLiquidity', [event.params.tokenId.toString()])
+    log.warning('Skipping IncreaseLiquidity for position {} - unable to load or create', [
+      event.params.tokenId.toString()
+    ])
     return
   }
 
-  // temp fix for problematic pools
+  // Skip problematic pools
   if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
     return
   }
 
-  // Check if pool is initialized
+  // Verify pool exists and is initialized
   let pool = Pool.load(position.pool)
   if (pool === null) {
-    log.warning('Pool not found for position {} in handleIncreaseLiquidity', [position.id])
+    log.error('Pool {} not found for position {} - this should not happen', [
+      position.pool,
+      position.id
+    ])
     return
   }
 
   if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleIncreaseLiquidity', [position.id])
+    log.warning('Pool {} not initialized for position {}', [position.pool, position.id])
     return
   }
 
@@ -144,7 +199,7 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleIncreaseLiquidity', [position.id])
+    log.error('Tokens not found for position {} - this should not happen', [position.id])
     return
   }
 
@@ -156,7 +211,6 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   position.depositedToken1 = position.depositedToken1.plus(amount1)
 
   position = updateFeeVars(position, event, event.params.tokenId)
-
   position.save()
 
   savePositionSnapshot(position, event)
@@ -166,28 +220,31 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   // Ensure bundle exists
   ensureBundleExists()
 
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
+  let position = getOrCreatePosition(event, event.params.tokenId)
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleDecreaseLiquidity', [event.params.tokenId.toString()])
+    log.warning('Skipping DecreaseLiquidity for position {} - unable to load or create', [
+      event.params.tokenId.toString()
+    ])
     return
   }
 
-  // temp fix for problematic pools
+  // Skip problematic pools
   if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
     return
   }
 
-  // Check if pool is initialized
+  // Verify pool exists and is initialized
   let pool = Pool.load(position.pool)
   if (pool === null) {
-    log.warning('Pool not found for position {} in handleDecreaseLiquidity', [position.id])
+    log.error('Pool {} not found for position {} - this should not happen', [
+      position.pool,
+      position.id
+    ])
     return
   }
 
   if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleDecreaseLiquidity', [position.id])
+    log.warning('Pool {} not initialized for position {}', [position.pool, position.id])
     return
   }
 
@@ -195,7 +252,7 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleDecreaseLiquidity', [position.id])
+    log.error('Tokens not found for position {} - this should not happen', [position.id])
     return
   }
 
@@ -207,7 +264,6 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   position.withdrawnToken1 = position.withdrawnToken1.plus(amount1)
 
   position = updateFeeVars(position, event, event.params.tokenId)
-
   position.save()
 
   savePositionSnapshot(position, event)
@@ -217,28 +273,31 @@ export function handleCollect(event: Collect): void {
   // Ensure bundle exists
   ensureBundleExists()
 
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
+  let position = getOrCreatePosition(event, event.params.tokenId)
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleCollect', [event.params.tokenId.toString()])
+    log.warning('Skipping Collect for position {} - unable to load or create', [
+      event.params.tokenId.toString()
+    ])
     return
   }
 
-  // temp fix for problematic pools
+  // Skip problematic pools
   if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
     return
   }
 
-  // Check if pool is initialized
+  // Verify pool exists and is initialized
   let pool = Pool.load(position.pool)
   if (pool === null) {
-    log.warning('Pool not found for position {} in handleCollect', [position.id])
+    log.error('Pool {} not found for position {} - this should not happen', [
+      position.pool,
+      position.id
+    ])
     return
   }
 
   if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleCollect', [position.id])
+    log.warning('Pool {} not initialized for position {}', [position.pool, position.id])
     return
   }
 
@@ -246,7 +305,7 @@ export function handleCollect(event: Collect): void {
   let token1 = Token.load(position.token1)
 
   if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleCollect', [position.id])
+    log.error('Tokens not found for position {} - this should not happen', [position.id])
     return
   }
 
@@ -269,7 +328,6 @@ export function handleCollect(event: Collect): void {
   }
 
   position = updateFeeVars(position, event, event.params.tokenId)
-
   position.save()
 
   savePositionSnapshot(position, event)
@@ -279,11 +337,23 @@ export function handleTransfer(event: Transfer): void {
   // Ensure bundle exists
   ensureBundleExists()
 
-  let position = getPosition(event, event.params.tokenId)
+  // Skip mints from zero address - position will be created when first used
+  if (event.params.from.toHexString() == ADDRESS_ZERO) {
+    log.debug('Skipping mint transfer for position {}', [event.params.tokenId.toString()])
+    return
+  }
 
-  // position was not able to be fetched
+  // Skip burns to zero address
+  if (event.params.to.toHexString() == ADDRESS_ZERO) {
+    log.debug('Position {} burned', [event.params.tokenId.toString()])
+    return
+  }
+
+  let position = getOrCreatePosition(event, event.params.tokenId)
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleTransfer', [event.params.tokenId.toString()])
+    log.warning('Skipping Transfer for position {} - unable to load or create', [
+      event.params.tokenId.toString()
+    ])
     return
   }
 
