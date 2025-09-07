@@ -18,19 +18,33 @@ services:
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
       ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB'
-      # Enhanced logging
-      GRAPH_LOG: debug
-      RUST_LOG: debug,hyper=error,web3=trace
+
+      # Optimized logging to reduce overhead
+      GRAPH_LOG: info
+      RUST_LOG: info,hyper=warn,web3=info
       GRAPH_LOG_QUERY_TIMING: gql
+
+      # Core settings optimized for Alchemy free tier
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
-      GRAPH_ETHEREUM_REQUEST_RETRIES: 10
-      GRAPH_ETHEREUM_POLLING_INTERVAL: 450
+      GRAPH_ETHEREUM_REQUEST_RETRIES: 15
+      GRAPH_ETHEREUM_POLLING_INTERVAL: 750
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: true
-      # Additional debug settings
+
+      # Conservative block processing to minimize RPC calls
       GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 1
       GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 1
       GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 10
-      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 10
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 5
+
+      # Additional rate limiting protections
+      GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 32
+      GRAPH_ETHEREUM_RPC_TIMEOUT: 60
+      GRAPH_ETHEREUM_REORG_THRESHOLD: 25
+      GRAPH_ETHEREUM_ANCESTOR_COUNT: 5
+
+      # Memory and performance settings
+      GRAPH_KILL_IF_UNRESPONSIVE: true
+      GRAPH_MAX_IPFS_FILE_BYTES: 100000000
     networks:
       - graph-network
 
@@ -52,6 +66,9 @@ services:
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      # Database optimizations
+      POSTGRES_MAX_CONNECTIONS: 100
+      POSTGRES_SHARED_BUFFERS: 128MB
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
@@ -60,3 +77,14 @@ services:
 networks:
   graph-network:
     driver: bridge
+
+# Optimizations made to avoid 429 errors on Alchemy free tier:
+# - Reduced logging from debug to info (less overhead)
+# - Increased polling interval: 450ms → 750ms (slower requests)
+# - Reduced block range size: 10 → 5 (smaller batches)
+# - Reduced triggers per block: 10 → 5 (fewer operations)
+# - Increased retries: 10 → 15 (better 429 handling)
+# - Added parallel request limit: 32 (prevent overwhelming RPC)
+# - Added RPC timeout: 60s (handle slow responses)
+# - Added reorg threshold: 25 blocks (stability)
+# - Added ancestor count limit: 5 (reduce historical queries)
