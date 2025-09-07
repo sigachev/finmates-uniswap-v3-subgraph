@@ -18,33 +18,19 @@ services:
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
       ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB'
-
-      # Logging - reduced from debug to avoid overhead
-      GRAPH_LOG: info
-      RUST_LOG: info,hyper=warn,web3=info
+      # Enhanced logging
+      GRAPH_LOG: debug
+      RUST_LOG: debug,hyper=error,web3=trace
       GRAPH_LOG_QUERY_TIMING: gql
-
-      # Optimized settings to avoid 429 errors on Alchemy free tier
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
-      GRAPH_ETHEREUM_REQUEST_RETRIES: 15
-      GRAPH_ETHEREUM_POLLING_INTERVAL: 750          # Increased from 450ms to 750ms
-      GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 32      # Limit concurrent requests
+      GRAPH_ETHEREUM_REQUEST_RETRIES: 10
+      GRAPH_ETHEREUM_POLLING_INTERVAL: 450
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: true
-
-      # Conservative block processing to minimize RPC calls
+      # Additional debug settings
       GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 1
       GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 1
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 5        # Reduced from 10 to 5
-      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 5  # Reduced from 10 to 5
-
-      # Additional rate limiting protections
-      GRAPH_ETHEREUM_RPC_TIMEOUT: 60               # 60 second timeout per request
-      GRAPH_ETHEREUM_REORG_THRESHOLD: 25           # Conservative reorg handling
-      GRAPH_ETHEREUM_ANCESTOR_COUNT: 5             # Limit ancestor block checks
-
-      # Memory and performance settings
-      GRAPH_KILL_IF_UNRESPONSIVE: true
-      GRAPH_MAX_IPFS_FILE_BYTES: 100000000         # 100MB limit
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 10
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 10
     networks:
       - graph-network
 
@@ -66,9 +52,6 @@ services:
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-      # Add connection limits to reduce database overhead
-      POSTGRES_MAX_CONNECTIONS: 100
-      POSTGRES_SHARED_BUFFERS: 128MB
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
@@ -77,21 +60,3 @@ services:
 networks:
   graph-network:
     driver: bridge
-
-# Avoid 429 Alchemy errors on free tier:
-#
-# Current optimizations:
-# - Polling interval: 750ms (slower requests)
-# - Block range: 5 blocks per request (smaller batches)
-# - Parallel requests: 32 concurrent (limited)
-# - Request retries: 15 (handle temporary rate limits)
-# - Logging reduced to 'info' (less overhead)
-#
-# If still hitting 429 errors, try these settings:
-# GRAPH_ETHEREUM_POLLING_INTERVAL: 1000 (1 second)
-# GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 3
-# GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 16
-#
-# Monitor usage at: https://dashboard.alchemy.com
-# Free tier: 300M compute units/month
-# Consider upgrading to Growth plan for production use
