@@ -9,42 +9,63 @@ services:
       - '8030:8030'
       - '8040:8040'
     depends_on:
-      - ipfs
-      - postgres
+      ipfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
+      # PostgreSQL connection - MUST match postgres service below
       postgres_host: postgres
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
-      ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB'
 
-      # Optimized logging to reduce overhead
+      # Arbitrum RPC endpoint - using reliable public RPC
+      ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
+
+      # Alternative options (uncomment to use):
+      # Alchemy: ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY'
+      # Your RPC: ethereum: 'arbitrum-one:https://arbitrum-rpc.finmates.com'
+
+      # Logging
       GRAPH_LOG: info
-      RUST_LOG: info,hyper=warn,web3=info
+      RUST_LOG: info
       GRAPH_LOG_QUERY_TIMING: gql
 
-      # Core settings optimized for Alchemy free tier
-      GRAPH_ETHEREUM_CLEANUP_BLOCKS: true
-      GRAPH_ETHEREUM_REQUEST_RETRIES: 15
-      GRAPH_ETHEREUM_POLLING_INTERVAL: 750
-      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: true
+      # SSL - allow any certificates
+      GRAPH_ETHEREUM_ALLOW_INVALID_CERTIFICATES: "true"
 
-      # Conservative block processing to minimize RPC calls
-      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 1
-      GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 1
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 10
-      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 5
+      # Core settings - optimized for fast sync
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: "true"
+      GRAPH_ETHEREUM_REQUEST_RETRIES: 3
+      GRAPH_ETHEREUM_POLLING_INTERVAL: 250
+      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: "true"
 
-      # Additional rate limiting protections
-      GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 32
-      GRAPH_ETHEREUM_RPC_TIMEOUT: 60
-      GRAPH_ETHEREUM_REORG_THRESHOLD: 25
-      GRAPH_ETHEREUM_ANCESTOR_COUNT: 5
+      # Block processing - AGGRESSIVE settings for fast RPC
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 50
+      GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 100
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 2000
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 1000
 
-      # Memory and performance settings
-      GRAPH_KILL_IF_UNRESPONSIVE: true
+      # Connection settings - maximized for fast RPC
+      GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 256
+      GRAPH_ETHEREUM_RPC_TIMEOUT: 300
+      GRAPH_ETHEREUM_REORG_THRESHOLD: 250
+      GRAPH_ETHEREUM_ANCESTOR_COUNT: 50
+
+      # Performance
+      GRAPH_KILL_IF_UNRESPONSIVE: "true"
       GRAPH_MAX_IPFS_FILE_BYTES: 100000000
+
+      # Batch processing - maximized for speed
+      GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: "true"
+      GRAPH_ETHEREUM_BATCH_SIZE: 100
+
+      # Additional performance optimizations
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: 100
+      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: 2000
+    restart: unless-stopped
     networks:
       - graph-network
 
@@ -54,6 +75,14 @@ services:
       - '5001:5001'
     volumes:
       - ./data/ipfs:/data/ipfs
+    environment:
+      IPFS_PROFILE: server
+    healthcheck:
+      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - graph-network
 
@@ -61,30 +90,27 @@ services:
     image: postgres:14
     ports:
       - '5432:5432'
+    command:
+      - "postgres"
+      - "-cshared_preload_libraries=pg_stat_statements"
+      - "-cmax_connections=200"
     environment:
+      # MUST match graph-node credentials above
       POSTGRES_USER: graph-node
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-      # Database optimizations
-      POSTGRES_MAX_CONNECTIONS: 100
-      POSTGRES_SHARED_BUFFERS: 128MB
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graph-node"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - graph-network
 
 networks:
   graph-network:
     driver: bridge
-
-# Optimizations made to avoid 429 errors on Alchemy free tier:
-# - Reduced logging from debug to info (less overhead)
-# - Increased polling interval: 450ms → 750ms (slower requests)
-# - Reduced block range size: 10 → 5 (smaller batches)
-# - Reduced triggers per block: 10 → 5 (fewer operations)
-# - Increased retries: 10 → 15 (better 429 handling)
-# - Added parallel request limit: 32 (prevent overwhelming RPC)
-# - Added RPC timeout: 60s (handle slow responses)
-# - Added reorg threshold: 25 blocks (stability)
-# - Added ancestor count limit: 5 (reduce historical queries)
