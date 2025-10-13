@@ -2,100 +2,143 @@ version: '3'
 services:
   graph-node:
     image: graphprotocol/graph-node:latest
-    ports:
-      - '8000:8000'
-      - '8001:8001'
-      - '8020:8020'
-      - '8030:8030'
-      - '8040:8040'
+    network_mode: host
     depends_on:
       ipfs:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      # Mount WSL CA certificates into container
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+      - /usr/share/ca-certificates:/usr/share/ca-certificates:ro
     environment:
-      # PostgreSQL connection - MUST match postgres service below
-      postgres_host: postgres
+      # SSL Certificate paths
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      SSL_CERT_DIR: /etc/ssl/certs
+
+      # PostgreSQL connection - use localhost since we're on host network
+      postgres_host: localhost
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
-      ipfs: 'ipfs:5001'
+      ipfs: 'localhost:5001'
 
-      # Arbitrum RPC endpoint - using reliable public RPC
-      ethereum: 'arbitrum-one:https://arb1.arbitrum.io/rpc'
+      # Arbitrum RPC endpoint - HTTPS with proper certs
+      ethereum: 'arbitrum-one:https://arbitrum-rpc.finmates.com'
 
-      # Alternative options (uncomment to use):
-      # Alchemy: ethereum: 'arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY'
-      # Your RPC: ethereum: 'arbitrum-one:https://arbitrum-rpc.finmates.com'
-
-      # Logging
-      GRAPH_LOG: info
-      RUST_LOG: info
+      # Logging - reduced for performance
+      GRAPH_LOG: warn
+      RUST_LOG: warn
       GRAPH_LOG_QUERY_TIMING: gql
 
-      # SSL - allow any certificates
-      GRAPH_ETHEREUM_ALLOW_INVALID_CERTIFICATES: "true"
-
-      # Core settings - optimized for fast sync
+      # Core settings - OPTIMIZED for your fast RPC
       GRAPH_ETHEREUM_CLEANUP_BLOCKS: "true"
       GRAPH_ETHEREUM_REQUEST_RETRIES: 3
       GRAPH_ETHEREUM_POLLING_INTERVAL: 250
       GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: "true"
 
-      # Block processing - AGGRESSIVE settings for fast RPC
+      # Block processing - OPTIMIZED for fast private RPC
       GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: 50
       GRAPH_ETHEREUM_BLOCK_STREAM_STEP_SIZE: 100
       GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: 2000
       GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: 1000
 
-      # Connection settings - maximized for fast RPC
+      # Connection settings - OPTIMIZED for private RPC without rate limits
       GRAPH_ETHEREUM_MAX_PARALLEL_REQUESTS: 256
       GRAPH_ETHEREUM_RPC_TIMEOUT: 300
       GRAPH_ETHEREUM_REORG_THRESHOLD: 250
       GRAPH_ETHEREUM_ANCESTOR_COUNT: 50
 
-      # Performance
+      # Performance - aggressive settings
       GRAPH_KILL_IF_UNRESPONSIVE: "true"
       GRAPH_MAX_IPFS_FILE_BYTES: 100000000
+      GRAPH_IPFS_TIMEOUT: 120
+      GRAPH_ETHEREUM_JSON_RPC_TIMEOUT: 300
 
-      # Batch processing - maximized for speed
+      # Batch processing - OPTIMIZED for speed
       GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: "true"
       GRAPH_ETHEREUM_BATCH_SIZE: 100
-
-      # Additional performance optimizations
       GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: 100
       GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: 2000
+
+      # Database connection pooling - OPTIMIZED
+      GRAPH_STORE_CONNECTION_POOL_SIZE: 25
+      GRAPH_STORE_CONNECTION_MIN_IDLE: 5
+
+      # Query performance
+      GRAPH_GRAPHQL_MAX_COMPLEXITY: 10000000
+      GRAPH_GRAPHQL_MAX_DEPTH: 100
+      GRAPH_GRAPHQL_MAX_FIRST: 10000
+      GRAPH_GRAPHQL_MAX_SKIP: 10000000
+
+      # Memory and resource limits
+      GRAPH_MAX_SPEC_VERSION: "1.2.0"
+      GRAPH_MAPPING_HANDLER_TIMEOUT: 180
+
+      # Disable unnecessary features for speed
+      GRAPH_DISABLE_BLOCK_INGESTOR: "false"
+      DISABLE_GRAFTING: "false"
+
     restart: unless-stopped
-    networks:
-      - graph-network
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
 
   ipfs:
     image: ipfs/go-ipfs:v0.10.0
-    ports:
-      - '5001:5001'
+    network_mode: host
     volumes:
       - ./data/ipfs:/data/ipfs
     environment:
       IPFS_PROFILE: server
+      IPFS_FD_MAX: 4096
     healthcheck:
       test: ["CMD-SHELL", "ipfs id || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks:
-      - graph-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
 
   postgres:
     image: postgres:14
-    ports:
-      - '5432:5432'
+    network_mode: host
     command:
       - "postgres"
       - "-cshared_preload_libraries=pg_stat_statements"
-      - "-cmax_connections=200"
+      - "-cmax_connections=400"
+      - "-cshared_buffers=4GB"
+      - "-ceffective_cache_size=12GB"
+      - "-cmaintenance_work_mem=1GB"
+      - "-ccheckpoint_completion_target=0.9"
+      - "-cwal_buffers=16MB"
+      - "-cdefault_statistics_target=100"
+      - "-crandom_page_cost=1.1"
+      - "-ceffective_io_concurrency=200"
+      - "-cwork_mem=20MB"
+      - "-cmin_wal_size=1GB"
+      - "-cmax_wal_size=4GB"
+      - "-cmax_worker_processes=8"
+      - "-cmax_parallel_workers_per_gather=4"
+      - "-cmax_parallel_workers=8"
+      - "-cmax_parallel_maintenance_workers=4"
     environment:
-      # MUST match graph-node credentials above
       POSTGRES_USER: graph-node
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
@@ -108,9 +151,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks:
-      - graph-network
-
-networks:
-  graph-network:
-    driver: bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
+    shm_size: 2gb
