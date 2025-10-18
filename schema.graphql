@@ -1,9 +1,12 @@
+# Uniswap V3 Subgraph Schema with Tick Analytics
+# Built-in scalar types: ID, String, Boolean, Int, BigInt, BigDecimal, Bytes
+
 type Factory @entity(immutable: false) {
   # factory address
   id: ID!
   # amount of pools created
   poolCount: BigInt!
-  # amoutn of transactions all time
+  # amount of transactions all time
   txCount: BigInt!
   # total volume all time in derived USD
   totalVolumeUSD: BigDecimal!
@@ -11,7 +14,7 @@ type Factory @entity(immutable: false) {
   totalVolumeETH: BigDecimal!
   # total swap fees all time in USD
   totalFeesUSD: BigDecimal!
-  # total swap fees all time in USD
+  # total swap fees all time in ETH
   totalFeesETH: BigDecimal!
   # all volume even through less reliable USD values
   untrackedVolumeUSD: BigDecimal!
@@ -23,7 +26,6 @@ type Factory @entity(immutable: false) {
   totalValueLockedUSDUntracked: BigDecimal!
   # TVL derived in ETH untracked
   totalValueLockedETHUntracked: BigDecimal!
-
   # current owner of the factory
   owner: ID!
 }
@@ -182,8 +184,6 @@ type Tick @entity(immutable: false) {
   createdAtBlockNumber: BigInt!
   # Fields used to help derived relationship
   liquidityProviderCount: BigInt! # used to detect new exchanges
-  # derived fields
-  # swaps: [Swap!]! @derivedFrom(field: "tick")
   # vars needed for fee computation
   feeGrowthOutside0X128: BigInt!
   feeGrowthOutside1X128: BigInt!
@@ -334,7 +334,7 @@ type Burn @entity(immutable: true) {
   owner: Bytes
   # txn origin
   origin: Bytes! # the EOA that initiated the txn
-  # amouny of liquidity burned
+  # amount of liquidity burned
   amount: BigInt!
   # amount of token 0 burned
   amount0: BigDecimal!
@@ -402,7 +402,7 @@ type Collect @entity(immutable: true) {
   amountUSD: BigDecimal
   # lower tick of position
   tickLower: BigInt!
-  # uppper tick of position
+  # upper tick of position
   tickUpper: BigInt!
   # index within the txn
   logIndex: BigInt
@@ -487,7 +487,7 @@ type PoolDayData @entity(immutable: false) {
   volumeUSD: BigDecimal!
   # fees in USD
   feesUSD: BigDecimal!
-  # numebr of transactions during period
+  # number of transactions during period
   txCount: BigInt!
   # opening price of token0
   open: BigDecimal!
@@ -531,7 +531,7 @@ type PoolHourData @entity(immutable: false) {
   volumeUSD: BigDecimal!
   # fees in USD
   feesUSD: BigDecimal!
-  # numebr of transactions during period
+  # number of transactions during period
   txCount: BigInt!
   # opening price of token0
   open: BigDecimal!
@@ -595,7 +595,7 @@ type TickDayData @entity(immutable: false) {
 }
 
 type TokenDayData @entity(immutable: false) {
-  # token address concatendated with date
+  # token address concatenated with date
   id: ID!
   # timestamp rounded to current day by dividing by 86400
   date: Int!
@@ -626,7 +626,7 @@ type TokenDayData @entity(immutable: false) {
 }
 
 type TokenHourData @entity(immutable: false) {
-  # token address concatendated with date
+  # token address concatenated with date
   id: ID!
   # unix timestamp for start of hour
   periodStartUnix: Int!
@@ -654,4 +654,347 @@ type TokenHourData @entity(immutable: false) {
   low: BigDecimal!
   # close price USD
   close: BigDecimal!
+}
+
+
+# ============================================
+# TICK ACTIVITY ANALYTICS - 8 TIMEFRAMES
+# ============================================
+
+"""
+Track per-tick crossing activity with 8 timeframes (1h, 3h, 6h, 12h, 24h, 3d, 7d, 30d)
+"""
+type TickActivity @entity(immutable: false) {
+  " Format: {poolAddress}-{tickIndex} "
+  id: ID!
+
+  " Reference to the pool "
+  pool: Pool!
+
+  " Tick index "
+  tickIdx: BigInt!
+
+  " Approximate price at this tick (token1/token0) "
+  price: BigDecimal!
+
+  " Hit counters for different timeframes "
+  hits1h: BigInt!
+  hits3h: BigInt!
+  hits6h: BigInt!
+  hits12h: BigInt!
+  hits24h: BigInt!
+  hits3d: BigInt!
+  hits7d: BigInt!
+  hits30d: BigInt!
+
+  " Volume counters (in token0) "
+  volume1h: BigDecimal!
+  volume3h: BigDecimal!
+  volume6h: BigDecimal!
+  volume12h: BigDecimal!
+  volume24h: BigDecimal!
+  volume3d: BigDecimal!
+  volume7d: BigDecimal!
+  volume30d: BigDecimal!
+
+  " Liquidity changes "
+  liquidityAdded: BigInt!
+  liquidityRemoved: BigInt!
+
+  " Fees collected "
+  feesCollected: BigDecimal!
+
+  " Last update timestamp "
+  lastUpdateTimestamp: BigInt!
+}
+
+"""
+Track most active ticks globally across different timeframes
+"""
+type GlobalTickRanking @entity(immutable: false) {
+  " Format: {timeframe}-{rank} e.g. '1h-1', '24h-5' "
+  id: ID!
+
+  " Timeframe identifier "
+  timeframe: String!
+
+  " Rank position (1-100) "
+  rank: Int!
+
+  " Reference to TickActivity "
+  tickActivity: TickActivity!
+
+  " Hit count at time of ranking "
+  hitCount: BigInt!
+
+  " Volume at time of ranking "
+  volume: BigDecimal!
+
+  " Timestamp of ranking "
+  timestamp: BigInt!
+}
+
+"""
+Track tick crossings per pool across timeframes
+"""
+type PoolTickActivity @entity(immutable: false) {
+  " Format: {poolAddress} "
+  id: ID!
+
+  " Reference to pool "
+  pool: Pool!
+
+  " Total unique ticks crossed "
+  totalTicksCrossed: BigInt!
+
+  " Count of crossings per timeframe "
+  count1h: BigInt!
+  count3h: BigInt!
+  count6h: BigInt!
+  count12h: BigInt!
+  count24h: BigInt!
+  count3d: BigInt!
+  count7d: BigInt!
+  count30d: BigInt!
+
+  " Last update "
+  lastUpdateTimestamp: BigInt!
+}
+
+
+# ============================================
+# TICK RANGE ANALYTICS - MERGED & ENHANCED
+# ============================================
+
+"""
+Track specific tick ranges where positions concentrate
+Combines simple position tracking with advanced analytics
+"""
+type TickRange @entity(immutable: false) {
+  " Format: {poolAddress}-{lowerTick}-{upperTick} "
+  id: ID!
+
+  # Reference data
+  pool: Pool!
+  lowerTick: BigInt!
+  upperTick: BigInt!
+
+  # Price range boundaries
+  priceLower: BigDecimal!  # token0 price at lower tick
+  priceUpper: BigDecimal!  # token0 price at upper tick
+  priceCurrent: BigDecimal! # current token0 price in pool
+
+  # Liquidity metrics
+  liquidityActive: BigInt!     # Liquidity currently active in this range
+  totalLiquidity: BigInt!      # Total liquidity (active + inactive positions)
+  liquidityUSD: BigDecimal!    # USD value of liquidity in range
+  activePositions: BigInt!     # Number of active positions in this range
+  avgLiquidityPerPosition: BigDecimal!
+
+  # Volume metrics (lifetime)
+  volumeToken0: BigDecimal!
+  volumeToken1: BigDecimal!
+  volumeUSD: BigDecimal!
+
+  # Fee metrics (lifetime)
+  totalFeesCollected: BigDecimal!
+  feesToken0: BigDecimal!
+  feesToken1: BigDecimal!
+
+  # Performance metrics
+  feeAPR24h: BigDecimal!
+  feeAPR7d: BigDecimal!
+  volumeToLiquidityRatio24h: BigDecimal!
+
+  # Activity metrics
+  crossingCount: BigInt!       # Number of times this range was crossed
+
+  # Time-series snapshots
+  rangeHourData: [TickRangeHourData!]! @derivedFrom(field: "tickRange")
+  rangeDayData: [TickRangeDayData!]! @derivedFrom(field: "tickRange")
+
+  # Status flags
+  isInRange: Boolean!          # Is current price within this range?
+  lastUpdateTimestamp: BigInt!
+  lastUpdateBlock: BigInt!
+}
+
+# Hourly snapshots of tick range data
+type TickRangeHourData @entity(immutable: false) {
+  # <pool>-<lowerTick>-<upperTick>-<hourTimestamp>
+  id: ID!
+  periodStartUnix: Int!
+  tickRange: TickRange!
+  pool: Pool!
+
+  # Liquidity at hour end
+  liquidityActive: BigInt!
+  liquidityUSD: BigDecimal!
+  positionCount: BigInt!
+
+  # Volume during hour
+  volumeToken0: BigDecimal!
+  volumeToken1: BigDecimal!
+  volumeUSD: BigDecimal!
+
+  # Fees during hour
+  feesUSD: BigDecimal!
+  feesToken0: BigDecimal!
+  feesToken1: BigDecimal!
+
+  # Derived metrics
+  feeAPR: BigDecimal!
+  volumeToLiquidityRatio: BigDecimal!
+
+  # Number of swaps that utilized this range
+  swapCount: BigInt!
+
+  # Was price in range during this hour?
+  priceInRange: Boolean!
+  avgPrice: BigDecimal!
+}
+
+# Daily snapshots of tick range data
+type TickRangeDayData @entity(immutable: false) {
+  # <pool>-<lowerTick>-<upperTick>-<dayTimestamp>
+  id: ID!
+  date: Int!
+  tickRange: TickRange!
+  pool: Pool!
+
+  # Liquidity metrics
+  liquidityActive: BigInt!
+  liquidityUSD: BigDecimal!
+  avgLiquidityUSD: BigDecimal!  # Time-weighted average
+  positionCount: BigInt!
+
+  # Volume metrics
+  volumeToken0: BigDecimal!
+  volumeToken1: BigDecimal!
+  volumeUSD: BigDecimal!
+
+  # Fee metrics
+  feesUSD: BigDecimal!
+  feesToken0: BigDecimal!
+  feesToken1: BigDecimal!
+
+  # Performance metrics
+  feeAPR: BigDecimal!
+  volumeToLiquidityRatio: BigDecimal!
+
+  # Activity metrics
+  swapCount: BigInt!
+  hoursInRange: Int!           # How many hours was price in this range?
+  utilizationRate: BigDecimal! # hoursInRange / 24
+
+  # Price metrics
+  avgPrice: BigDecimal!
+  highPrice: BigDecimal!
+  lowPrice: BigDecimal!
+}
+
+# Predefined popular tick ranges for easy querying
+type PopularTickRange @entity(immutable: false) {
+  # <pool>-<rangeSize>-<centerTick>
+  id: ID!
+  pool: Pool!
+
+  # Range definition
+  rangeType: String!          # "narrow", "medium", "wide", "full"
+  tickSpacing: Int!           # Based on pool fee tier
+  lowerTick: Int!
+  upperTick: Int!
+  centerTick: Int!
+
+  # Price range
+  priceLower: BigDecimal!
+  priceUpper: BigDecimal!
+  priceCenter: BigDecimal!
+  priceRangePercent: BigDecimal!  # % price can move within range
+
+  # Aggregated metrics
+  totalLiquidityUSD: BigDecimal!
+  volume24h: BigDecimal!
+  fees24h: BigDecimal!
+  feeAPR24h: BigDecimal!
+
+  # Risk metrics
+  impermanentLossRisk: BigDecimal!  # Estimated IL based on price volatility
+
+  lastUpdate: BigInt!
+}
+
+# Track the most profitable ranges for ranking
+type RangeProfitabilityRanking @entity(immutable: false) {
+  # <pool>-<timeframe>-<timestamp>
+  id: ID!
+  pool: Pool!
+  timestamp: BigInt!
+  timeframe: String!  # "1h", "24h", "7d"
+
+  # Top ranges by different metrics
+  topByFeeAPR: [TickRange!]!
+  topByVolume: [TickRange!]!
+  topByLiquidity: [TickRange!]!
+  topByEfficiency: [TickRange!]!  # volume/liquidity ratio
+
+  # Scores for each range
+  feeAPRScores: [BigDecimal!]!
+  volumeScores: [BigDecimal!]!
+  liquidityScores: [BigDecimal!]!
+  efficiencyScores: [BigDecimal!]!
+  compositeScores: [BigDecimal!]!
+}
+
+# Optimal range suggestions based on current market conditions
+type OptimalRangeSuggestion @entity(immutable: false) {
+  # <pool>-<strategy>-<timestamp>
+  id: ID!
+  pool: Pool!
+  strategy: String!  # "conservative", "moderate", "aggressive"
+  timestamp: BigInt!
+
+  # Suggested range
+  suggestedLowerTick: Int!
+  suggestedUpperTick: Int!
+  suggestedPriceLower: BigDecimal!
+  suggestedPriceUpper: BigDecimal!
+
+  # Expected performance
+  expectedFeeAPR: BigDecimal!
+  expectedVolume24h: BigDecimal!
+  confidenceScore: BigDecimal!  # 0-100
+
+  # Risk assessment
+  impermanentLossRisk: String!  # "low", "medium", "high"
+  priceVolatility: BigDecimal!
+
+  # Supporting data
+  historicalFeeAPR7d: BigDecimal!
+  historicalFeeAPR30d: BigDecimal!
+  competingLiquidityUSD: BigDecimal!
+
+  # Reasoning
+  reason: String!
+}
+
+# Liquidity density heatmap data
+type LiquidityDistribution @entity(immutable: false) {
+  # <pool>-<timestamp>
+  id: ID!
+  pool: Pool!
+  timestamp: BigInt!
+  currentTick: BigInt!
+  currentPrice: BigDecimal!
+
+  # Distribution bins (percentages from current price)
+  # Each array has 20 bins: -50% to +50% in 5% increments
+  tickRanges: [Int!]!
+  liquidityAmounts: [BigInt!]!
+  liquidityUSD: [BigDecimal!]!
+  positionCounts: [Int!]!
+
+  # Concentration metrics
+  liquidityConcentration: BigDecimal!  # Gini coefficient
+  topRangesLiquidityShare: BigDecimal! # Top 20% ranges hold what % of liquidity
 }

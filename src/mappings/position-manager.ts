@@ -10,6 +10,17 @@ import { Position, PositionSnapshot, Token, Bundle, Pool, Factory, Tick } from '
 import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI, FACTORY_ADDRESS, ONE_BD } from '../utils/constants'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { convertTokenToDecimal, loadTransaction, safeDiv, bigDecimalExponated } from '../utils'
+import {
+  getOrCreateTickRange,
+  updateTickRangeOnPositionAdd,
+  updateTickRangeOnPositionRemove,
+  recordTickRangeFees,
+} from "../utils/tickRange"
+import {
+  getOrCreateTickActivity,
+  recordLiquidityChange,
+  recordFeesCollected,
+} from "../utils/tickFrequency"
 
 // Helper function to ensure bundle exists
 function ensureBundleExists(): Bundle {
@@ -226,6 +237,45 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
 
   position.save()
 
+  // === NEW: Track Tick Range Analytics ===
+  let tickLower = Tick.load(position.tickLower)
+  let tickUpper = Tick.load(position.tickUpper)
+
+  if (tickLower !== null && tickUpper !== null && pool !== null) {
+    let tickRange = getOrCreateTickRange(
+      position.pool,
+      tickLower.tickIdx,
+      tickUpper.tickIdx,
+      pool
+    )
+
+    updateTickRangeOnPositionAdd(
+      tickRange,
+      event.params.liquidity,
+      event.block.timestamp
+    )
+
+    // Track liquidity added to ticks
+    let price = pool.token1Price.div(pool.token0Price)
+
+    let lowerTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickLower.tickIdx,
+      pool,
+      price
+    )
+    recordLiquidityChange(lowerTickActivity, event.params.liquidity, true)
+
+    let upperTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickUpper.tickIdx,
+      pool,
+      price
+    )
+    recordLiquidityChange(upperTickActivity, event.params.liquidity, true)
+  }
+  // === END NEW ===
+
   savePositionSnapshot(position, event)
 }
 
@@ -277,6 +327,45 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
 
   position.save()
 
+  // === NEW: Track Tick Range Analytics ===
+  let tickLower = Tick.load(position.tickLower)
+  let tickUpper = Tick.load(position.tickUpper)
+
+  if (tickLower !== null && tickUpper !== null && pool !== null) {
+    let tickRange = getOrCreateTickRange(
+      position.pool,
+      tickLower.tickIdx,
+      tickUpper.tickIdx,
+      pool
+    )
+
+    updateTickRangeOnPositionRemove(
+      tickRange,
+      event.params.liquidity,
+      event.block.timestamp
+    )
+
+    // Track liquidity removed from ticks
+    let price = pool.token1Price.div(pool.token0Price)
+
+    let lowerTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickLower.tickIdx,
+      pool,
+      price
+    )
+    recordLiquidityChange(lowerTickActivity, event.params.liquidity, false)
+
+    let upperTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickUpper.tickIdx,
+      pool,
+      price
+    )
+    recordLiquidityChange(upperTickActivity, event.params.liquidity, false)
+  }
+  // === END NEW ===
+
   savePositionSnapshot(position, event)
 }
 
@@ -319,6 +408,45 @@ export function handleCollect(event: Collect): void {
 
   let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
   let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+  // === NEW: Track Fees in Tick Range ===
+  let tickLower = Tick.load(position.tickLower)
+  let tickUpper = Tick.load(position.tickUpper)
+
+  if (tickLower !== null && tickUpper !== null && pool !== null) {
+    let fees0USD = amount0.times(pool.token0Price)
+    let fees1USD = amount1.times(pool.token1Price)
+    let totalFeesUSD = fees0USD.plus(fees1USD)
+
+    let tickRange = getOrCreateTickRange(
+      position.pool,
+      tickLower.tickIdx,
+      tickUpper.tickIdx,
+      pool
+    )
+
+    recordTickRangeFees(tickRange, totalFeesUSD)
+
+    // Record fees on tick activities
+    let price = pool.token1Price.div(pool.token0Price)
+
+    let lowerTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickLower.tickIdx,
+      pool,
+      price
+    )
+    recordFeesCollected(lowerTickActivity, totalFeesUSD.div(BigDecimal.fromString("2")))
+
+    let upperTickActivity = getOrCreateTickActivity(
+      position.pool,
+      tickUpper.tickIdx,
+      pool,
+      price
+    )
+    recordFeesCollected(upperTickActivity, totalFeesUSD.div(BigDecimal.fromString("2")))
+  }
+  // === END NEW ===
 
   position.collectedToken0 = position.collectedToken0.plus(amount0)
   position.collectedToken1 = position.collectedToken1.plus(amount1)

@@ -22,6 +22,12 @@ import {
   updateUniswapDayData
 } from '../utils/intervalUpdates'
 import { createTick, feeTierToTickSpacing } from '../utils/tick'
+import {
+  getOrCreateTickActivity,
+  recordTickCrossing,
+  getOrCreatePoolTickActivity,
+  updatePoolTickActivity,
+} from "../utils/tickFrequency"
 
 // Helper function to ensure bundle exists and has a valid ETH price
 function ensureBundleExists(): Bundle {
@@ -42,6 +48,36 @@ function ensureBundleExists(): Bundle {
   }
 
   return bundle as Bundle
+}
+
+function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
+  let poolAddress = tick.pool
+  let pool = Pool.load(poolAddress)
+  if (pool === null) {
+    log.error('Pool not found in updateTickFeeVarsAndSave: {}', [poolAddress])
+    return
+  }
+
+  let poolContract = PoolABI.bind(event.address)
+  let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
+  if (tickResult.reverted) {
+    log.warning('tick() call reverted for tick {}', [tick.tickIdx.toString()])
+    return
+  }
+
+  tick.feeGrowthOutside0X128 = tickResult.value.value2
+  tick.feeGrowthOutside1X128 = tickResult.value.value3
+  tick.save()
+
+  updateTickDayData(tick as Tick, event)
+}
+
+function loadTickUpdateFeeVarsAndSave(tickId: i32, event: ethereum.Event): void {
+  let poolAddress = event.address.toHexString()
+  let tick = Tick.load(poolAddress.concat('#').concat(tickId.toString()))
+  if (tick !== null) {
+    updateTickFeeVarsAndSave(tick as Tick, event)
+  }
 }
 
 export function handleInitialize(event: Initialize): void {
@@ -144,8 +180,9 @@ export function handleMint(event: MintEvent): void {
   factory.totalValueLockedETH = factory.totalValueLockedETH.plus(pool.totalValueLockedETH)
   factory.totalValueLockedUSD = factory.totalValueLockedETH.times(bundle.ethPriceUSD)
 
+  // create Mint entity
   let transaction = loadTransaction(event)
-  let mint = new Mint(transaction.id.toString() + '#' + pool.txCount.toString())
+  let mint = new Mint(transaction.id + '#' + pool.txCount.toString())
   mint.transaction = transaction.id
   mint.timestamp = transaction.timestamp
   mint.pool = pool.id
@@ -319,6 +356,7 @@ export function handleBurn(event: BurnEvent): void {
   updateTokenDayData(token1 as Token, event)
   updateTokenHourData(token0 as Token, event)
   updateTokenHourData(token1 as Token, event)
+
   updateTickFeeVarsAndSave(lowerTick, event)
   updateTickFeeVarsAndSave(upperTick, event)
 
@@ -552,6 +590,31 @@ export function handleSwap(event: SwapEvent): void {
   token0.save()
   token1.save()
 
+  // === NEW: Track Tick Crossing Activity ===
+  let tickIdx = BigInt.fromI32(event.params.tick as i32)
+  let poolAddress = event.address.toHexString()
+
+  if (pool !== null && token0 !== null && token1 !== null) {
+    // Calculate current price
+    let price = safeDiv(pool.token1Price, pool.token0Price)
+
+    // Get or create tick activity
+    let tickActivity = getOrCreateTickActivity(
+      poolAddress,
+      tickIdx,
+      pool,
+      price
+    )
+
+    // Record the crossing with volume in token0 (absolute value)
+    recordTickCrossing(tickActivity, amount0Abs, event.block.timestamp)
+
+    // Update pool-level tick activity
+    let poolTickActivity = getOrCreatePoolTickActivity(poolAddress, pool)
+    updatePoolTickActivity(poolTickActivity, event.block.timestamp)
+  }
+  // === END NEW ===
+
   // Update inner vars of current or crossed ticks
   let newTick = pool.tick!
   let tickSpacing = feeTierToTickSpacing(pool.feeTier)
@@ -643,7 +706,7 @@ export function handleCollect(event: CollectEvent): void {
   let transaction = loadTransaction(event)
   let collect = new Collect(transaction.id + '#' + pool.txCount.toString())
   collect.transaction = transaction.id
-  collect.timestamp = event.block.timestamp
+  collect.timestamp = transaction.timestamp
   collect.pool = pool.id
   collect.owner = event.params.owner
   collect.amount0 = amount0
@@ -653,32 +716,4 @@ export function handleCollect(event: CollectEvent): void {
   collect.tickUpper = BigInt.fromI32(event.params.tickUpper)
   collect.logIndex = event.logIndex
   collect.save()
-}
-
-function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
-  let poolAddress = event.address
-  // not all ticks are initialized so obtaining null is expected behavior
-  let poolContract = PoolABI.bind(poolAddress)
-  let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
-
-  if (!tickResult.reverted) {
-    tick.feeGrowthOutside0X128 = tickResult.value.value2
-    tick.feeGrowthOutside1X128 = tickResult.value.value3
-    tick.save()
-
-    updateTickDayData(tick, event)
-  }
-}
-
-function loadTickUpdateFeeVarsAndSave(tickId: i32, event: ethereum.Event): void {
-  let poolAddress = event.address
-  let tick = Tick.load(
-    poolAddress
-      .toHexString()
-      .concat('#')
-      .concat(tickId.toString())
-  )
-  if (tick !== null) {
-    updateTickFeeVarsAndSave(tick, event)
-  }
 }
