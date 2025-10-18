@@ -19,8 +19,47 @@ services:
       postgres_pass: let-me-in
       postgres_db: graph-node
       ipfs: ipfs:5001
-      ethereum: arbitrum-one:http://arbitrum-rpc.finmates.com  # Changed to HTTP
+      ethereum: arbitrum-one:http://arbitrum-rpc.finmates.com,arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB
       GRAPH_LOG: info
+
+      # Performance optimizations for fast RPC
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '50'              # Fetch 50 blocks at once (default: 10)
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '500'         # Max range for getLogs (default: 1000, adjust based on RPC limits)
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: '500'  # Optimize trigger fetching
+
+      # Increase parallel processing
+      GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: 'true'
+      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '5000'        # Larger range for event-only queries
+
+      # Database connection pool optimization
+      GRAPH_STORE_CONNECTION_POOL_SIZE: '25'             # Increase from default 10
+      GRAPH_STORE_CONNECTION_MIN_IDLE: '5'
+
+      # Disable unnecessary features for speed
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
+      DISABLE_BLOCK_INGESTOR: 'false'
+
+      # Increase logging detail (optional, remove for production)
+      GRAPH_LOG_QUERY_TIMING: 'gql'
+
+      # Set higher limits for your powerful setup
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '250'             # Poll every 250ms (faster head tracking)
+      GRAPH_NODE_ID: 'default'
+
+      # Memory and resource limits (adjust based on your system)
+      GRAPH_GRAPHQL_MAX_COMPLEXITY: '10000'
+      GRAPH_GRAPHQL_MAX_DEPTH: '100'
+      GRAPH_GRAPHQL_MAX_FIRST: '1000'
+
+    # Add resource limits to prevent OOM
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
 
   ipfs:
     image: ipfs/go-ipfs:v0.10.0
@@ -28,6 +67,9 @@ services:
       - "5001:5001"
     volumes:
       - ./data/ipfs:/data/ipfs
+    environment:
+      # IPFS optimizations
+      IPFS_PROFILE: server
 
   postgres:
     image: postgres:14
@@ -38,6 +80,34 @@ services:
       POSTGRES_PASSWORD: let-me-in
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-    command: ["postgres", "-cshared_preload_libraries=pg_stat_statements"]
+    command:
+      - "postgres"
+      - "-cshared_preload_libraries=pg_stat_statements"
+      # PostgreSQL performance tuning for NVMe
+      - "-cmax_connections=200"
+      - "-cshared_buffers=2GB"                    # 25% of RAM (adjust based on your system)
+      - "-ceffective_cache_size=6GB"              # 50-75% of RAM
+      - "-cmaintenance_work_mem=512MB"
+      - "-ccheckpoint_completion_target=0.9"
+      - "-cwal_buffers=16MB"
+      - "-cdefault_statistics_target=100"
+      - "-crandom_page_cost=1.1"                  # Lower for SSD/NVMe (default 4)
+      - "-ceffective_io_concurrency=200"          # Higher for NVMe (default 1)
+      - "-cwork_mem=32MB"                         # Per operation memory
+      - "-cmin_wal_size=1GB"
+      - "-cmax_wal_size=4GB"
+      - "-cmax_worker_processes=4"
+      - "-cmax_parallel_workers_per_gather=2"
+      - "-cmax_parallel_workers=4"
+      - "-cmax_parallel_maintenance_workers=2"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    # Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 4G
+          cpus: '2'
