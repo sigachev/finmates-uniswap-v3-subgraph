@@ -1,489 +1,285 @@
-/* eslint-disable prefer-const */
 import {
-  Collect,
-  DecreaseLiquidity,
   IncreaseLiquidity,
-  NonfungiblePositionManager,
+  DecreaseLiquidity,
+  Collect,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, PositionSnapshot, Token, Bundle, Pool, Factory, Tick } from '../types/schema'
-import { ADDRESS_ZERO, factoryContract, ZERO_BD, ZERO_BI, FACTORY_ADDRESS, ONE_BD } from '../utils/constants'
+import { Position, Tick, Transaction } from '../types/schema'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
-import { convertTokenToDecimal, loadTransaction, safeDiv, bigDecimalExponated } from '../utils'
-import {
-  getOrCreateTickRange,
-  updateTickRangeOnPositionAdd,
-  updateTickRangeOnPositionRemove,
-  recordTickRangeFees,
-} from "../utils/tickRange"
-import {
-  getOrCreateTickActivity,
-  recordLiquidityChange,
-  recordFeesCollected,
-} from "../utils/tickFrequency"
+import { getOrCreatePool } from '../utils/pool-helper'
+import { NonfungiblePositionManager } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
+import { Factory } from '../types/Factory/Factory'
 
-// Helper function to ensure bundle exists
-function ensureBundleExists(): Bundle {
-  let bundle = Bundle.load('1')
-  if (bundle === null) {
-    bundle = new Bundle('1')
-    bundle.ethPriceUSD = BigDecimal.fromString('2000') // Default ETH price
-    bundle.save()
-  }
+export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
+  let positionId = event.params.tokenId.toString()
+  let position = Position.load(positionId)
 
-  // Always ensure we have a valid ETH price
-  if (bundle.ethPriceUSD.equals(ZERO_BD) || bundle.ethPriceUSD.toString() == '0') {
-    bundle.ethPriceUSD = BigDecimal.fromString('2000')
-    bundle.save()
-  }
+  if (position == null) {
+    // Position doesn't exist yet, create it
+    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
 
-  return bundle as Bundle
-}
-
-function getPosition(event: ethereum.Event, tokenId: BigInt): Position | null {
-  let position = Position.load(tokenId.toString())
-  if (position === null) {
-    let contract = NonfungiblePositionManager.bind(event.address)
-    let positionCall = contract.try_positions(tokenId)
-
-    // the following call reverts in situations where the position is minted
-    // and deleted in the same block - from my investigation this happens
-    // in calls from  BancorSwap
-    // (e.g. 0xf7867fa19aa65298fadb8d4f72d0daed5e836f3ba01f0b9b9631cdc6c36bed40)
-    if (!positionCall.reverted) {
-      let positionResult = positionCall.value
-      let poolAddress = factoryContract.getPool(positionResult.value2, positionResult.value3, positionResult.value4)
-
-      // Check if pool exists
-      let pool = Pool.load(poolAddress.toHexString())
-      if (pool === null) {
-        log.warning('Pool does not exist for position {}, skipping', [tokenId.toString()])
-        return null
-      }
-
-      position = new Position(tokenId.toString())
-      // The owner gets correctly updated in the Transfer handler
-      position.owner = Address.fromString(ADDRESS_ZERO)
-      position.pool = poolAddress.toHexString()
-      position.token0 = positionResult.value2.toHexString()
-      position.token1 = positionResult.value3.toHexString()
-
-      // Create tick references if they don't exist
-      let tickLowerId = position.pool.concat('#').concat(positionResult.value5.toString())
-      let tickUpperId = position.pool.concat('#').concat(positionResult.value6.toString())
-
-      let tickLower = Tick.load(tickLowerId)
-      if (tickLower === null) {
-        // Create a basic tick without using createTick (which expects a Mint event)
-        tickLower = new Tick(tickLowerId)
-        tickLower.tickIdx = BigInt.fromI32(positionResult.value5)
-        tickLower.pool = position.pool
-        tickLower.poolAddress = position.pool
-        tickLower.createdAtTimestamp = event.block.timestamp
-        tickLower.createdAtBlockNumber = event.block.number
-        tickLower.liquidityGross = ZERO_BI
-        tickLower.liquidityNet = ZERO_BI
-        tickLower.liquidityProviderCount = ZERO_BI
-
-        // Calculate prices
-        let price0 = bigDecimalExponated(BigDecimal.fromString('1.0001'), BigInt.fromI32(positionResult.value5))
-        tickLower.price0 = price0
-        tickLower.price1 = safeDiv(ONE_BD, price0)
-
-        tickLower.volumeToken0 = ZERO_BD
-        tickLower.volumeToken1 = ZERO_BD
-        tickLower.volumeUSD = ZERO_BD
-        tickLower.feesUSD = ZERO_BD
-        tickLower.untrackedVolumeUSD = ZERO_BD
-        tickLower.collectedFeesToken0 = ZERO_BD
-        tickLower.collectedFeesToken1 = ZERO_BD
-        tickLower.collectedFeesUSD = ZERO_BD
-        tickLower.feeGrowthOutside0X128 = ZERO_BI
-        tickLower.feeGrowthOutside1X128 = ZERO_BI
-        tickLower.save()
-      }
-
-      let tickUpper = Tick.load(tickUpperId)
-      if (tickUpper === null) {
-        // Create a basic tick without using createTick (which expects a Mint event)
-        tickUpper = new Tick(tickUpperId)
-        tickUpper.tickIdx = BigInt.fromI32(positionResult.value6)
-        tickUpper.pool = position.pool
-        tickUpper.poolAddress = position.pool
-        tickUpper.createdAtTimestamp = event.block.timestamp
-        tickUpper.createdAtBlockNumber = event.block.number
-        tickUpper.liquidityGross = ZERO_BI
-        tickUpper.liquidityNet = ZERO_BI
-        tickUpper.liquidityProviderCount = ZERO_BI
-
-        // Calculate prices
-        let price0 = bigDecimalExponated(BigDecimal.fromString('1.0001'), BigInt.fromI32(positionResult.value6))
-        tickUpper.price0 = price0
-        tickUpper.price1 = safeDiv(ONE_BD, price0)
-
-        tickUpper.volumeToken0 = ZERO_BD
-        tickUpper.volumeToken1 = ZERO_BD
-        tickUpper.volumeUSD = ZERO_BD
-        tickUpper.feesUSD = ZERO_BD
-        tickUpper.untrackedVolumeUSD = ZERO_BD
-        tickUpper.collectedFeesToken0 = ZERO_BD
-        tickUpper.collectedFeesToken1 = ZERO_BD
-        tickUpper.collectedFeesUSD = ZERO_BD
-        tickUpper.feeGrowthOutside0X128 = ZERO_BI
-        tickUpper.feeGrowthOutside1X128 = ZERO_BI
-        tickUpper.save()
-      }
-
-      position.tickLower = tickLowerId
-      position.tickUpper = tickUpperId
-      position.liquidity = ZERO_BI
-      position.depositedToken0 = ZERO_BD
-      position.depositedToken1 = ZERO_BD
-      position.withdrawnToken0 = ZERO_BD
-      position.withdrawnToken1 = ZERO_BD
-      position.collectedToken0 = ZERO_BD
-      position.collectedToken1 = ZERO_BD
-      position.collectedFeesToken0 = ZERO_BD
-      position.collectedFeesToken1 = ZERO_BD
-      position.transaction = loadTransaction(event).id
-      position.feeGrowthInside0LastX128 = positionResult.value8
-      position.feeGrowthInside1LastX128 = positionResult.value9
-    } else {
-      log.warning('Position call reverted for tokenId {}', [tokenId.toString()])
-      return null
+    if (position == null) {
+      log.error('Failed to create position {}', [positionId])
+      return
     }
   }
 
-  return position
-}
-
-function updateFeeVars(position: Position, event: ethereum.Event, tokenId: BigInt): Position {
-  let positionManagerContract = NonfungiblePositionManager.bind(event.address)
-  let positionResult = positionManagerContract.try_positions(tokenId)
-  if (!positionResult.reverted) {
-    position.feeGrowthInside0LastX128 = positionResult.value.value8
-    position.feeGrowthInside1LastX128 = positionResult.value.value9
-  } else {
-    log.warning('Error updating fee vars for position {}', [position.id])
-  }
-  return position
-}
-
-function savePositionSnapshot(position: Position, event: ethereum.Event): void {
-  let positionSnapshot = new PositionSnapshot(position.id.concat('#').concat(event.block.number.toString()))
-  positionSnapshot.owner = position.owner
-  positionSnapshot.pool = position.pool
-  positionSnapshot.position = position.id
-  positionSnapshot.blockNumber = event.block.number
-  positionSnapshot.timestamp = event.block.timestamp
-  positionSnapshot.liquidity = position.liquidity
-  positionSnapshot.depositedToken0 = position.depositedToken0
-  positionSnapshot.depositedToken1 = position.depositedToken1
-  positionSnapshot.withdrawnToken0 = position.withdrawnToken0
-  positionSnapshot.withdrawnToken1 = position.withdrawnToken1
-  positionSnapshot.collectedFeesToken0 = position.collectedFeesToken0
-  positionSnapshot.collectedFeesToken1 = position.collectedFeesToken1
-  positionSnapshot.transaction = loadTransaction(event).id
-  positionSnapshot.feeGrowthInside0LastX128 = position.feeGrowthInside0LastX128
-  positionSnapshot.feeGrowthInside1LastX128 = position.feeGrowthInside1LastX128
-  positionSnapshot.save()
-}
-
-export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
-  // Ensure bundle exists
-  ensureBundleExists()
-
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
-  if (position == null) {
-    log.warning('Position not found for tokenId {} in handleIncreaseLiquidity', [event.params.tokenId.toString()])
+  // Ensure pool exists
+  let pool = getOrCreatePool(Address.fromString(position.pool))
+  if (pool == null) {
+    log.error('Failed to create pool for position {}', [positionId])
     return
   }
 
-  // temp fix for problematic pools
-  if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
-    return
-  }
-
-  // Check if pool is initialized
-  let pool = Pool.load(position.pool)
-  if (pool === null) {
-    log.warning('Pool not found for position {} in handleIncreaseLiquidity', [position.id])
-    return
-  }
-
-  if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleIncreaseLiquidity', [position.id])
-    return
-  }
-
-  let token0 = Token.load(position.token0)
-  let token1 = Token.load(position.token1)
-
-  if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleIncreaseLiquidity', [position.id])
-    return
-  }
-
-  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-
+  // Update position liquidity
   position.liquidity = position.liquidity.plus(event.params.liquidity)
-  position.depositedToken0 = position.depositedToken0.plus(amount0)
-  position.depositedToken1 = position.depositedToken1.plus(amount1)
-
-  position = updateFeeVars(position, event, event.params.tokenId)
-
   position.save()
 
-  // === NEW: Track Tick Range Analytics ===
-  let tickLower = Tick.load(position.tickLower)
-  let tickUpper = Tick.load(position.tickUpper)
+  // Update pool liquidity
+  pool.liquidity = pool.liquidity.plus(event.params.liquidity)
+  pool.save()
 
-  if (tickLower !== null && tickUpper !== null && pool !== null) {
-    let tickRange = getOrCreateTickRange(
-      position.pool,
-      tickLower.tickIdx,
-      tickUpper.tickIdx,
-      pool
-    )
-
-    updateTickRangeOnPositionAdd(
-      tickRange,
-      event.params.liquidity,
-      event.block.timestamp
-    )
-
-    // Track liquidity added to ticks
-    let price = pool.token1Price.div(pool.token0Price)
-
-    let lowerTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickLower.tickIdx,
-      pool,
-      price
-    )
-    recordLiquidityChange(lowerTickActivity, event.params.liquidity, true)
-
-    let upperTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickUpper.tickIdx,
-      pool,
-      price
-    )
-    recordLiquidityChange(upperTickActivity, event.params.liquidity, true)
-  }
-  // === END NEW ===
-
-  savePositionSnapshot(position, event)
+  log.info('Increased liquidity for position {}: +{}', [
+    positionId,
+    event.params.liquidity.toString()
+  ])
 }
 
 export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
-  // Ensure bundle exists
-  ensureBundleExists()
+  let positionId = event.params.tokenId.toString()
+  let position = Position.load(positionId)
 
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleDecreaseLiquidity', [event.params.tokenId.toString()])
+    log.error('Position {} does not exist', [positionId])
     return
   }
 
-  // temp fix for problematic pools
-  if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
+  // Ensure pool exists
+  let pool = getOrCreatePool(Address.fromString(position.pool))
+  if (pool == null) {
+    log.error('Failed to create pool for position {}', [positionId])
     return
   }
 
-  // Check if pool is initialized
-  let pool = Pool.load(position.pool)
-  if (pool === null) {
-    log.warning('Pool not found for position {} in handleDecreaseLiquidity', [position.id])
-    return
-  }
-
-  if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleDecreaseLiquidity', [position.id])
-    return
-  }
-
-  let token0 = Token.load(position.token0)
-  let token1 = Token.load(position.token1)
-
-  if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleDecreaseLiquidity', [position.id])
-    return
-  }
-
-  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-
+  // Update position liquidity
   position.liquidity = position.liquidity.minus(event.params.liquidity)
-  position.withdrawnToken0 = position.withdrawnToken0.plus(amount0)
-  position.withdrawnToken1 = position.withdrawnToken1.plus(amount1)
-
-  position = updateFeeVars(position, event, event.params.tokenId)
-
   position.save()
 
-  // === NEW: Track Tick Range Analytics ===
-  let tickLower = Tick.load(position.tickLower)
-  let tickUpper = Tick.load(position.tickUpper)
+  // Update pool liquidity
+  pool.liquidity = pool.liquidity.minus(event.params.liquidity)
+  pool.save()
 
-  if (tickLower !== null && tickUpper !== null && pool !== null) {
-    let tickRange = getOrCreateTickRange(
-      position.pool,
-      tickLower.tickIdx,
-      tickUpper.tickIdx,
-      pool
-    )
-
-    updateTickRangeOnPositionRemove(
-      tickRange,
-      event.params.liquidity,
-      event.block.timestamp
-    )
-
-    // Track liquidity removed from ticks
-    let price = pool.token1Price.div(pool.token0Price)
-
-    let lowerTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickLower.tickIdx,
-      pool,
-      price
-    )
-    recordLiquidityChange(lowerTickActivity, event.params.liquidity, false)
-
-    let upperTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickUpper.tickIdx,
-      pool,
-      price
-    )
-    recordLiquidityChange(upperTickActivity, event.params.liquidity, false)
-  }
-  // === END NEW ===
-
-  savePositionSnapshot(position, event)
+  log.info('Decreased liquidity for position {}: -{}', [
+    positionId,
+    event.params.liquidity.toString()
+  ])
 }
 
 export function handleCollect(event: Collect): void {
-  // Ensure bundle exists
-  ensureBundleExists()
+  let positionId = event.params.tokenId.toString()
+  let position = Position.load(positionId)
 
-  let position = getPosition(event, event.params.tokenId)
-
-  // position was not able to be fetched
   if (position == null) {
-    log.warning('Position not found for tokenId {} in handleCollect', [event.params.tokenId.toString()])
+    log.warning('Position {} does not exist for Collect event', [positionId])
     return
   }
 
-  // temp fix for problematic pools
-  if (Address.fromString(position.pool).equals(Address.fromHexString('0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'))) {
-    return
-  }
+  // Update collected fees
+  let amount0Decimal = BigDecimal.fromString(event.params.amount0.toString())
+  let amount1Decimal = BigDecimal.fromString(event.params.amount1.toString())
 
-  // Check if pool is initialized
-  let pool = Pool.load(position.pool)
-  if (pool === null) {
-    log.warning('Pool not found for position {} in handleCollect', [position.id])
-    return
-  }
-
-  if (pool.sqrtPrice.equals(ZERO_BI)) {
-    log.warning('Pool not initialized for position {} in handleCollect', [position.id])
-    return
-  }
-
-  let token0 = Token.load(position.token0)
-  let token1 = Token.load(position.token1)
-
-  if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for position {} in handleCollect', [position.id])
-    return
-  }
-
-  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-
-  // === NEW: Track Fees in Tick Range ===
-  let tickLower = Tick.load(position.tickLower)
-  let tickUpper = Tick.load(position.tickUpper)
-
-  if (tickLower !== null && tickUpper !== null && pool !== null) {
-    let fees0USD = amount0.times(pool.token0Price)
-    let fees1USD = amount1.times(pool.token1Price)
-    let totalFeesUSD = fees0USD.plus(fees1USD)
-
-    let tickRange = getOrCreateTickRange(
-      position.pool,
-      tickLower.tickIdx,
-      tickUpper.tickIdx,
-      pool
-    )
-
-    recordTickRangeFees(tickRange, totalFeesUSD)
-
-    // Record fees on tick activities
-    let price = pool.token1Price.div(pool.token0Price)
-
-    let lowerTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickLower.tickIdx,
-      pool,
-      price
-    )
-    recordFeesCollected(lowerTickActivity, totalFeesUSD.div(BigDecimal.fromString("2")))
-
-    let upperTickActivity = getOrCreateTickActivity(
-      position.pool,
-      tickUpper.tickIdx,
-      pool,
-      price
-    )
-    recordFeesCollected(upperTickActivity, totalFeesUSD.div(BigDecimal.fromString("2")))
-  }
-  // === END NEW ===
-
-  position.collectedToken0 = position.collectedToken0.plus(amount0)
-  position.collectedToken1 = position.collectedToken1.plus(amount1)
-
-  // Calculate fees as collected minus withdrawn
-  position.collectedFeesToken0 = position.collectedToken0.minus(position.withdrawnToken0)
-  position.collectedFeesToken1 = position.collectedToken1.minus(position.withdrawnToken1)
-
-  // Ensure fees are not negative
-  if (position.collectedFeesToken0.lt(ZERO_BD)) {
-    position.collectedFeesToken0 = ZERO_BD
-  }
-  if (position.collectedFeesToken1.lt(ZERO_BD)) {
-    position.collectedFeesToken1 = ZERO_BD
-  }
-
-  position = updateFeeVars(position, event, event.params.tokenId)
-
+  position.collectedFeesToken0 = position.collectedFeesToken0.plus(amount0Decimal)
+  position.collectedFeesToken1 = position.collectedFeesToken1.plus(amount1Decimal)
+  position.collectedToken0 = position.collectedToken0.plus(amount0Decimal)
+  position.collectedToken1 = position.collectedToken1.plus(amount1Decimal)
   position.save()
 
-  savePositionSnapshot(position, event)
+  log.info('Collected fees for position {}: {} token0, {} token1', [
+    positionId,
+    event.params.amount0.toString(),
+    event.params.amount1.toString()
+  ])
 }
 
 export function handleTransfer(event: Transfer): void {
-  // Ensure bundle exists
-  ensureBundleExists()
+  let positionId = event.params.tokenId.toString()
 
-  let position = getPosition(event, event.params.tokenId)
+  // Check if this is a mint (from zero address)
+  if (event.params.from.toHexString() == '0x0000000000000000000000000000000000000000') {
+    let position = loadOrCreatePosition(event.params.tokenId, event.address, event)
 
-  // position was not able to be fetched
-  if (position == null) {
-    log.warning('Position not found for tokenId {} in handleTransfer', [event.params.tokenId.toString()])
+    if (position != null) {
+      position.owner = event.params.to
+      position.save()
+
+      log.info('Minted new position {} to {}', [positionId, event.params.to.toHexString()])
+    } else {
+      log.error('Failed to create position {} on mint', [positionId])
+    }
     return
   }
 
-  position.owner = event.params.to
+  // Check if this is a burn (to zero address)
+  if (event.params.to.toHexString() == '0x0000000000000000000000000000000000000000') {
+    let position = Position.load(positionId)
+    if (position != null) {
+      // Mark position as burned
+      position.owner = event.params.to
+      position.liquidity = BigInt.fromI32(0)
+      position.save()
+
+      log.info('Burned position {}', [positionId])
+    }
+    return
+  }
+
+  // Regular transfer
+  let position = Position.load(positionId)
+  if (position != null) {
+    position.owner = event.params.to
+    position.save()
+
+    log.info('Transferred position {} from {} to {}', [
+      positionId,
+      event.params.from.toHexString(),
+      event.params.to.toHexString()
+    ])
+  }
+}
+
+function getOrCreateTick(poolAddress: string, tickIdx: i32): Tick {
+  let tickId = poolAddress + '#' + tickIdx.toString()
+  let tick = Tick.load(tickId)
+
+  if (tick == null) {
+    tick = new Tick(tickId)
+    tick.poolAddress = poolAddress
+    tick.tickIdx = BigInt.fromI32(tickIdx)
+    tick.pool = poolAddress
+    tick.liquidityGross = BigInt.fromI32(0)
+    tick.liquidityNet = BigInt.fromI32(0)
+    tick.price0 = BigDecimal.fromString('0')
+    tick.price1 = BigDecimal.fromString('0')
+    tick.volumeToken0 = BigDecimal.fromString('0')
+    tick.volumeToken1 = BigDecimal.fromString('0')
+    tick.volumeUSD = BigDecimal.fromString('0')
+    tick.untrackedVolumeUSD = BigDecimal.fromString('0')
+    tick.feesUSD = BigDecimal.fromString('0')
+    tick.collectedFeesToken0 = BigDecimal.fromString('0')
+    tick.collectedFeesToken1 = BigDecimal.fromString('0')
+    tick.collectedFeesUSD = BigDecimal.fromString('0')
+    tick.createdAtTimestamp = BigInt.fromI32(0)
+    tick.createdAtBlockNumber = BigInt.fromI32(0)
+    tick.liquidityProviderCount = BigInt.fromI32(0)
+    tick.feeGrowthOutside0X128 = BigInt.fromI32(0)
+    tick.feeGrowthOutside1X128 = BigInt.fromI32(0)
+    tick.save()
+  }
+
+  return tick as Tick
+}
+
+function loadOrCreatePosition(
+  tokenId: BigInt,
+  nftManagerAddress: Address,
+  event: ethereum.Event
+): Position | null {
+  let positionId = tokenId.toString()
+  let position = Position.load(positionId)
+
+  if (position != null) {
+    return position
+  }
+
+  // Fetch position data from contract
+  let nftContract = NonfungiblePositionManager.bind(nftManagerAddress)
+  let positionResult = nftContract.try_positions(tokenId)
+
+  if (positionResult.reverted) {
+    log.error('Failed to fetch position {} from contract', [positionId])
+    return null
+  }
+
+  let positionData = positionResult.value
+
+  // Get pool address from Factory
+  let factoryResult = nftContract.try_factory()
+  if (factoryResult.reverted) {
+    log.error('Failed to fetch factory address', [])
+    return null
+  }
+
+  // Get token addresses and fee from position data
+  // positions() returns: (nonce, operator, token0, token1, fee, tickLower, tickUpper, liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128, tokensOwed0, tokensOwed1)
+  let token0 = positionData.value2 as Address  // token0
+  let token1 = positionData.value3 as Address  // token1
+  let fee = positionData.value4 as i32         // fee
+
+  // Get pool address from Factory contract
+  let factoryContract = Factory.bind(factoryResult.value)
+  let poolAddressResult = factoryContract.try_getPool(token0, token1, fee)
+
+  if (poolAddressResult.reverted) {
+    log.error('Failed to fetch pool address for position {}', [positionId])
+    return null
+  }
+
+  let poolAddress = poolAddressResult.value
+
+  // Ensure pool exists (auto-create if needed)
+  let pool = getOrCreatePool(poolAddress)
+  if (pool == null) {
+    log.error('Failed to create pool {} for position {}', [
+      poolAddress.toHexString(),
+      positionId
+    ])
+    return null
+  }
+
+  // Get or create transaction
+  let transaction = Transaction.load(event.transaction.hash.toHexString())
+  if (transaction == null) {
+    transaction = new Transaction(event.transaction.hash.toHexString())
+    transaction.blockNumber = event.block.number
+    transaction.timestamp = event.block.timestamp
+    transaction.gasUsed = event.receipt ? event.receipt!.gasUsed : BigInt.fromI32(0)
+    transaction.gasPrice = event.transaction.gasPrice
+    transaction.save()
+  }
+
+  // Create tick entities for lower and upper
+  let tickLowerIdx = positionData.value5 as i32  // tickLower
+  let tickUpperIdx = positionData.value6 as i32  // tickUpper
+  let tickLower = getOrCreateTick(pool.id, tickLowerIdx)
+  let tickUpper = getOrCreateTick(pool.id, tickUpperIdx)
+
+  // Create position entity
+  position = new Position(positionId)
+  position.owner = Address.fromI32(0) // Will be set by Transfer event
+  position.pool = pool.id
+  position.token0 = pool.token0
+  position.token1 = pool.token1
+  position.tickLower = tickLower.id
+  position.tickUpper = tickUpper.id
+  position.liquidity = positionData.value7  // liquidity
+  position.feeGrowthInside0LastX128 = positionData.value8   // feeGrowthInside0LastX128
+  position.feeGrowthInside1LastX128 = positionData.value9  // feeGrowthInside1LastX128y
+
+  // Initialize accumulated amounts
+  position.depositedToken0 = BigDecimal.fromString('0')
+  position.depositedToken1 = BigDecimal.fromString('0')
+  position.withdrawnToken0 = BigDecimal.fromString('0')
+  position.withdrawnToken1 = BigDecimal.fromString('0')
+  position.collectedToken0 = BigDecimal.fromString('0')
+  position.collectedToken1 = BigDecimal.fromString('0')
+  position.collectedFeesToken0 = BigDecimal.fromString('0')
+  position.collectedFeesToken1 = BigDecimal.fromString('0')
+
+  position.transaction = transaction.id
+
   position.save()
 
-  savePositionSnapshot(position, event)
+  log.info('Created position {} for pool {}', [positionId, pool.id])
+
+  return position
 }

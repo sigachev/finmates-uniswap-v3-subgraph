@@ -18,48 +18,76 @@ services:
       postgres_user: graph-node
       postgres_pass: let-me-in
       postgres_db: graph-node
-      ipfs: ipfs:5001
-      ethereum: arbitrum-one:http://arbitrum-rpc.finmates.com,arbitrum-one:https://arb-mainnet.g.alchemy.com/v2/zAztGaJpmhEJZo1f1wIns665r07-RGgB
+      ipfs: 'ipfs:5001'
+      ethereum: 'arbitrum-one:https://arbitrum-rpc.finmates.com'
+      GRAPH_ETHEREUM_RPC_HTTP2: 'true'
       GRAPH_LOG: info
 
-      # Performance optimizations for fast RPC
-      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '50'              # Fetch 50 blocks at once (default: 10)
-      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '500'         # Max range for getLogs (default: 1000, adjust based on RPC limits)
-      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: '500'  # Optimize trigger fetching
+      # === HIGH LATENCY OPTIMIZATIONS ===
+      # Larger batches to reduce round trips with 200ms latency
+      GRAPH_ETHEREUM_BLOCK_BATCH_SIZE: '2000'  # Increased from 1000
+      GRAPH_ETHEREUM_MAX_BLOCK_RANGE_SIZE: '50000'  # Increased from 10000
+      GRAPH_ETHEREUM_TARGET_TRIGGERS_PER_BLOCK_RANGE: '1000'  # Increased from 500
 
-      # Increase parallel processing
+      # Aggressive batching for receipts
       GRAPH_ETHEREUM_FETCH_TXN_RECEIPTS_IN_BATCHES: 'true'
-      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '5000'        # Larger range for event-only queries
+      GRAPH_ETHEREUM_MAX_EVENT_ONLY_RANGE: '10000'  # Increased from 5000
 
-      # Database connection pool optimization
-      GRAPH_STORE_CONNECTION_POOL_SIZE: '25'             # Increase from default 10
-      GRAPH_STORE_CONNECTION_MIN_IDLE: '5'
+      # More parallel requests to RPC to compensate for latency
+      GRAPH_ETHEREUM_RPC_PARALLEL_REQUESTS: '128'  # NEW: Max concurrent RPC calls
+      GRAPH_ETHEREUM_BLOCK_INGESTOR_MAX_CONCURRENT_JSON_RPC_CALLS_FOR_TXN_RECEIPTS: '100'  # NEW
 
-      # Disable unnecessary features for speed
-      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '50'
-      DISABLE_BLOCK_INGESTOR: 'false'
+      # Larger connection pools for your powerful server
+      GRAPH_STORE_CONNECTION_POOL_SIZE: '50'  # Increased from 25
+      GRAPH_STORE_CONNECTION_MIN_IDLE: '10'  # Increased from 5
+      GRAPH_STORE_WRITE_QUEUE_SIZE: '10'  # NEW: Write buffering
 
-      # Increase logging detail (optional, remove for production)
+      # Trace optimization
+      GRAPH_ETHEREUM_TRACE_STREAM_STEP_SIZE: '100'  # Increased from 50
+
+      # Faster polling given you have archive node
+      GRAPH_ETHEREUM_POLLING_INTERVAL: '500'  # Slightly slower to reduce load with latency
+
+      # Query optimizations
       GRAPH_LOG_QUERY_TIMING: 'gql'
-
-      # Set higher limits for your powerful setup
-      GRAPH_ETHEREUM_POLLING_INTERVAL: '250'             # Poll every 250ms (faster head tracking)
-      GRAPH_NODE_ID: 'default'
-
-      # Memory and resource limits (adjust based on your system)
-      GRAPH_GRAPHQL_MAX_COMPLEXITY: '10000'
+      GRAPH_GRAPHQL_MAX_COMPLEXITY: '20000'  # Increased
       GRAPH_GRAPHQL_MAX_DEPTH: '100'
       GRAPH_GRAPHQL_MAX_FIRST: '1000'
+      GRAPH_GRAPHQL_MAX_SKIP: '10000'  # NEW
 
-    # Add resource limits to prevent OOM
+      # Memory optimizations for your 128GB system
+      GRAPH_MAX_SPEC_VERSION: '1.0.0'
+      GRAPH_ENTITY_CACHE_SIZE: '10000'  # NEW: In-memory entity cache
+      GRAPH_QUERY_CACHE_MAX_MEM: '2000'  # NEW: 2GB query cache
+
+      # Block cache to reduce RPC calls
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: 'false'  # Keep blocks in cache longer
+      GRAPH_ETHEREUM_BLOCK_CACHE_SIZE: '10000'  # NEW: Cache more blocks
+
+      # Disable expensive features you might not need
+      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
+      GRAPH_ALLOW_NON_DETERMINISTIC_IPFS: 'false'
+
+      # Indexing optimizations
+      GRAPH_ETHEREUM_REORG_THRESHOLD: '250'  # Arbitrum has fast finality
+      GRAPH_ETHEREUM_ANCESTOR_COUNT: '50'  # Reduced for faster reorg detection
+
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: '2'
+          memory: 16G  # Increased from 8G
+          cpus: '12'   # Increased from 4
         reservations:
-          memory: 2G
-          cpus: '1'
+          memory: 8G
+          cpus: '6'    # Increased from 2
+
+    # Use host network mode for better performance (optional)
+    # network_mode: host
+
+    # Optimize container DNS
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   ipfs:
     image: ipfs/go-ipfs:v0.10.0
@@ -68,8 +96,17 @@ services:
     volumes:
       - ./data/ipfs:/data/ipfs
     environment:
-      # IPFS optimizations
       IPFS_PROFILE: server
+      # Optimize IPFS for server use
+      IPFS_FD_MAX: 8192
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
 
   postgres:
     image: postgres:14
@@ -83,31 +120,75 @@ services:
     command:
       - "postgres"
       - "-cshared_preload_libraries=pg_stat_statements"
-      # PostgreSQL performance tuning for NVMe
-      - "-cmax_connections=200"
-      - "-cshared_buffers=2GB"                    # 25% of RAM (adjust based on your system)
-      - "-ceffective_cache_size=6GB"              # 50-75% of RAM
-      - "-cmaintenance_work_mem=512MB"
+
+      # Connection settings - increased for parallel processing
+      - "-cmax_connections=400"  # Increased from 200
+      - "-csuperuser_reserved_connections=10"
+
+      # Memory settings - optimized for 128GB server
+      - "-cshared_buffers=8GB"  # Increased from 2GB (25% of allocated memory)
+      - "-ceffective_cache_size=24GB"  # Increased from 6GB
+      - "-cmaintenance_work_mem=2GB"  # Increased from 512MB
+      - "-cwork_mem=64MB"  # Increased from 32MB
+      - "-chuge_pages=try"  # Enable huge pages for better memory management
+
+      # WAL settings - optimized for NVMe
+      - "-cwal_buffers=64MB"  # Increased from 16MB
+      - "-cmin_wal_size=2GB"  # Increased from 1GB
+      - "-cmax_wal_size=8GB"  # Increased from 4GB
+      - "-cwal_compression=on"  # NEW: Compress WAL
+      - "-cwal_writer_delay=200ms"  # Optimize for NVMe
+
+      # Checkpoint settings
       - "-ccheckpoint_completion_target=0.9"
-      - "-cwal_buffers=16MB"
-      - "-cdefault_statistics_target=100"
-      - "-crandom_page_cost=1.1"                  # Lower for SSD/NVMe (default 4)
-      - "-ceffective_io_concurrency=200"          # Higher for NVMe (default 1)
-      - "-cwork_mem=32MB"                         # Per operation memory
-      - "-cmin_wal_size=1GB"
-      - "-cmax_wal_size=4GB"
-      - "-cmax_worker_processes=4"
-      - "-cmax_parallel_workers_per_gather=2"
-      - "-cmax_parallel_workers=4"
-      - "-cmax_parallel_maintenance_workers=2"
+      - "-ccheckpoint_timeout=15min"  # NEW
+      - "-ccheckpoint_flush_after=256kB"  # NEW: For NVMe
+
+      # Query planner
+      - "-cdefault_statistics_target=500"  # Increased from 100
+      - "-crandom_page_cost=1.1"
+      - "-ceffective_io_concurrency=300"  # Increased from 200 (for NVMe)
+      - "-cseq_page_cost=1"  # NEW: Optimize for NVMe
+
+      # Parallel query settings - utilize your cores
+      - "-cmax_worker_processes=16"  # Increased from 4
+      - "-cmax_parallel_workers_per_gather=8"  # Increased from 2
+      - "-cmax_parallel_workers=16"  # Increased from 4
+      - "-cmax_parallel_maintenance_workers=8"  # Increased from 2
+      - "-cparallel_leader_participation=on"
+
+      # Autovacuum - keep it aggressive for write-heavy workload
+      - "-cautovacuum_max_workers=8"  # NEW
+      - "-cautovacuum_naptime=10s"  # NEW: More frequent
+
+      # Logging for monitoring
+      - "-clog_min_duration_statement=5000"  # Log slow queries > 5s
+      - "-clog_line_prefix=%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h "
+      - "-clog_checkpoints=on"
+      - "-clog_connections=on"
+      - "-clog_disconnections=on"
+      - "-clog_lock_waits=on"
+
+      # Additional optimizations
+      - "-csynchronous_commit=off"  # Faster writes, acceptable for blockchain indexing
+      - "-cfull_page_writes=on"  # Keep on for crash safety
+      - "-cshared_memory_type=mmap"  # Better for large shared_buffers
+
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
-    # Add resource limits
+
     deploy:
       resources:
         limits:
-          memory: 8G
-          cpus: '4'
+          memory: 32G  # Increased from 8G
+          cpus: '16'   # Increased from 4
         reservations:
-          memory: 4G
-          cpus: '2'
+          memory: 16G  # Increased from 4G
+          cpus: '8'    # Increased from 2
+
+    # Optimize for NVMe
+    shm_size: 4g  # Shared memory for parallel queries
+
+volumes:
+  postgres-data:
+  ipfs-data:
