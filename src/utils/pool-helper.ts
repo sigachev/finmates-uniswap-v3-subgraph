@@ -3,6 +3,8 @@ import { Pool, Token } from '../types/schema'
 import { Pool as PoolContract } from '../types/templates/Pool/Pool'
 import { Factory } from '../types/Factory/Factory'
 import { ERC20 } from '../types/Factory/ERC20'
+import { sqrtPriceX96ToTokenPrices } from '../utils/pricing'
+import { ZERO_BI } from '../utils/constants'
 
 export function getOrCreatePool(poolAddress: Address): Pool | null {
   let pool = Pool.load(poolAddress.toHexString())
@@ -54,6 +56,43 @@ export function getOrCreatePool(poolAddress: Address): Pool | null {
   pool.token1Price = BigDecimal.fromString('0')
   pool.tick = BigInt.fromI32(0)
   pool.observationIndex = BigInt.fromI32(0)
+
+  // Try to fetch current pool state from slot0()
+  let slot0Result = poolContract.try_slot0()
+  if (!slot0Result.reverted) {
+    pool.sqrtPrice = slot0Result.value.value0
+    pool.tick = BigInt.fromI32(slot0Result.value.value1)
+    pool.observationIndex = BigInt.fromI32(slot0Result.value.value2)
+
+    // Calculate token prices from sqrtPrice if we have a valid value
+    if (pool.sqrtPrice.gt(ZERO_BI)) {
+      let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
+      pool.token0Price = prices[0]
+      pool.token1Price = prices[1]
+
+      log.info('Pool {} initialized with sqrtPrice: {}, tick: {}, token0Price: {}, token1Price: {}', [
+        poolAddress.toHexString(),
+        pool.sqrtPrice.toString(),
+        pool.tick.toString(),
+        pool.token0Price.toString(),
+        pool.token1Price.toString()
+      ])
+    } else {
+      log.warning('Pool {} has zero sqrtPrice, prices will remain zero', [poolAddress.toHexString()])
+    }
+  } else {
+    log.warning('Failed to fetch slot0 for pool {}, prices will remain zero', [poolAddress.toHexString()])
+  }
+
+  // Try to fetch fee growth globals
+  let feeGrowthGlobal0Result = poolContract.try_feeGrowthGlobal0X128()
+  let feeGrowthGlobal1Result = poolContract.try_feeGrowthGlobal1X128()
+  if (!feeGrowthGlobal0Result.reverted) {
+    pool.feeGrowthGlobal0X128 = feeGrowthGlobal0Result.value
+  }
+  if (!feeGrowthGlobal1Result.reverted) {
+    pool.feeGrowthGlobal1X128 = feeGrowthGlobal1Result.value
+  }
   pool.volumeToken0 = BigDecimal.fromString('0')
   pool.volumeToken1 = BigDecimal.fromString('0')
   pool.volumeUSD = BigDecimal.fromString('0')
