@@ -73,7 +73,7 @@ export function getOrCreatePool(poolAddress: Address): Pool | null {
       log.info('Pool {} initialized with sqrtPrice: {}, tick: {}, token0Price: {}, token1Price: {}', [
         poolAddress.toHexString(),
         pool.sqrtPrice.toString(),
-        pool.tick.toString(),
+        pool.tick!.toString(),
         pool.token0Price.toString(),
         pool.token1Price.toString()
       ])
