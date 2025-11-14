@@ -1,4 +1,3 @@
-/* eslint-disable prefer-const */
 import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token, Collect, Flash } from '../types/schema'
 import { Pool as PoolABI } from '../types/Factory/Pool'
 import { BigDecimal, BigInt, ethereum, log } from '@graphprotocol/graph-ts'
@@ -28,6 +27,8 @@ import {
   getOrCreatePoolTickActivity,
   updatePoolTickActivity,
 } from "../utils/tickFrequency"
+import { updateRangeMetrics } from '../utils/popular-tick-ranges'
+
 
 // Helper function to ensure bundle exists and has a valid ETH price
 function ensureBundleExists(): Bundle {
@@ -49,6 +50,7 @@ function ensureBundleExists(): Bundle {
 
   return bundle as Bundle
 }
+
 
 function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
   let poolAddress = tick.pool
@@ -367,6 +369,7 @@ export function handleBurn(event: BurnEvent): void {
   burn.save()
 }
 
+
 export function handleSwap(event: SwapEvent): void {
   let bundle = ensureBundleExists()
   let factory = Factory.load(FACTORY_ADDRESS)
@@ -423,10 +426,7 @@ export function handleSwap(event: SwapEvent): void {
   let amount1USD = amount1ETH.times(bundle.ethPriceUSD)
 
   // get amount that should be tracked only - div 2 because cant count both input and output as volume
-  let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
-    BigDecimal.fromString('2')
-  )
-
+  let amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token)
   let amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
   let amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
 
@@ -480,6 +480,16 @@ export function handleSwap(event: SwapEvent): void {
   let prices = sqrtPriceX96ToTokenPrices(pool.sqrtPrice, token0 as Token, token1 as Token)
   pool.token0Price = prices[0]
   pool.token1Price = prices[1]
+
+  // Update popular tick ranges for analytics
+  updateRangeMetrics(
+    pool as Pool,
+    event.params.tick as i32,
+    amountTotalUSDTracked,
+    feesUSD,
+    event.block.timestamp
+  )
+
   pool.save()
 
   // update USD pricing
@@ -488,20 +498,13 @@ export function handleSwap(event: SwapEvent): void {
 
   token0.derivedETH = findEthPerToken(token0 as Token)
   token1.derivedETH = findEthPerToken(token1 as Token)
+  token0.save()
+  token1.save()
 
-  /**
-   * Things affected by new USD rates
-   */
-  pool.totalValueLockedETH = pool.totalValueLockedToken0
-    .times(token0.derivedETH)
-    .plus(pool.totalValueLockedToken1.times(token1.derivedETH))
-  pool.totalValueLockedUSD = pool.totalValueLockedETH.times(bundle.ethPriceUSD)
+  // Update pool tvl and factory tvl
+  //updateDerivedTVLAmounts(token0 as Token, token1 as Token, pool as Pool, factory as Factory, bundle as Bundle)
 
-  factory.totalValueLockedETH = factory.totalValueLockedETH.plus(pool.totalValueLockedETH)
-  factory.totalValueLockedUSD = factory.totalValueLockedETH.times(bundle.ethPriceUSD)
-
-  token0.totalValueLockedUSD = token0.totalValueLocked.times(token0.derivedETH).times(bundle.ethPriceUSD)
-  token1.totalValueLockedUSD = token1.totalValueLocked.times(token1.derivedETH).times(bundle.ethPriceUSD)
+  factory.save()
 
   // create Swap event
   let transaction = loadTransaction(event)
@@ -562,15 +565,15 @@ export function handleSwap(event: SwapEvent): void {
   token0DayData.untrackedVolumeUSD = token0DayData.untrackedVolumeUSD.plus(amountTotalUSDTracked)
   token0DayData.feesUSD = token0DayData.feesUSD.plus(feesUSD)
 
-  token0HourData.volume = token0HourData.volume.plus(amount0Abs)
-  token0HourData.volumeUSD = token0HourData.volumeUSD.plus(amountTotalUSDTracked)
-  token0HourData.untrackedVolumeUSD = token0HourData.untrackedVolumeUSD.plus(amountTotalUSDTracked)
-  token0HourData.feesUSD = token0HourData.feesUSD.plus(feesUSD)
-
   token1DayData.volume = token1DayData.volume.plus(amount1Abs)
   token1DayData.volumeUSD = token1DayData.volumeUSD.plus(amountTotalUSDTracked)
   token1DayData.untrackedVolumeUSD = token1DayData.untrackedVolumeUSD.plus(amountTotalUSDTracked)
   token1DayData.feesUSD = token1DayData.feesUSD.plus(feesUSD)
+
+  token0HourData.volume = token0HourData.volume.plus(amount0Abs)
+  token0HourData.volumeUSD = token0HourData.volumeUSD.plus(amountTotalUSDTracked)
+  token0HourData.untrackedVolumeUSD = token0HourData.untrackedVolumeUSD.plus(amountTotalUSDTracked)
+  token0HourData.feesUSD = token0HourData.feesUSD.plus(feesUSD)
 
   token1HourData.volume = token1HourData.volume.plus(amount1Abs)
   token1HourData.volumeUSD = token1HourData.volumeUSD.plus(amountTotalUSDTracked)
@@ -587,67 +590,14 @@ export function handleSwap(event: SwapEvent): void {
   token1HourData.save()
   factory.save()
   pool.save()
-  token0.save()
-  token1.save()
 
-  // === NEW: Track Tick Crossing Activity ===
-  let tickIdx = BigInt.fromI32(event.params.tick as i32)
-  let poolAddress = event.address.toHexString()
-
-  if (pool !== null && token0 !== null && token1 !== null) {
-    // Calculate current price
-    let price = safeDiv(pool.token1Price, pool.token0Price)
-
-    // Get or create tick activity
-    let tickActivity = getOrCreateTickActivity(
-      poolAddress,
-      tickIdx,
-      pool,
-      price
-    )
-
-    // Record the crossing with volume in token0 (absolute value)
-    recordTickCrossing(tickActivity, amount0Abs, event.block.timestamp)
-
-    // Update pool-level tick activity
-    let poolTickActivity = getOrCreatePoolTickActivity(poolAddress, pool)
-    updatePoolTickActivity(poolTickActivity, event.block.timestamp)
-  }
-  // === END NEW ===
-
-  // Update inner vars of current or crossed ticks
-  let newTick = pool.tick!
-  let tickSpacing = feeTierToTickSpacing(pool.feeTier)
-
-  let modulo = newTick.mod(tickSpacing)
-  if (modulo.equals(ZERO_BI)) {
-    // Current tick is initialized and needs to be updated
-    loadTickUpdateFeeVarsAndSave(newTick.toI32(), event)
-  }
-
-  let numIters = oldTick
-    .minus(newTick)
-    .abs()
-    .div(tickSpacing)
-
-  if (numIters.gt(BigInt.fromI32(100))) {
-    // In case more than 100 ticks need to be updated ignore the update in
-    // order to avoid timeouts. From testing this behavior occurs only upon
-    // pool initialization. This should not be a big issue as the ticks get
-    // updated later. For early users this error also disappears when calling
-    // collect
-  } else if (newTick.gt(oldTick)) {
-    let firstInitialized = oldTick.plus(tickSpacing.minus(modulo))
-    for (let i = firstInitialized; i.le(newTick); i = i.plus(tickSpacing)) {
-      loadTickUpdateFeeVarsAndSave(i.toI32(), event)
-    }
-  } else if (newTick.lt(oldTick)) {
-    let firstInitialized = oldTick.minus(modulo)
-    for (let i = firstInitialized; i.ge(newTick); i = i.minus(tickSpacing)) {
-      loadTickUpdateFeeVarsAndSave(i.toI32(), event)
-    }
-  }
+  // Update tick tracking
+  //updateTickTracking(event, pool as Pool, oldTick, event.params.tick)
 }
+
+
+
+
 
 export function handleFlash(event: FlashEvent): void {
   // Ensure bundle exists

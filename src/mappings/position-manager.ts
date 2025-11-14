@@ -10,6 +10,8 @@ import { getOrCreatePool } from '../utils/pool-helper'
 import { convertTokenToDecimal } from '../utils'
 import { NonfungiblePositionManager } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
 import { Factory } from '../types/Factory/Factory'
+import { createPositionSnapshot } from '../utils/position-snapshot'
+
 
 export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   let positionId = event.params.tokenId.toString()
@@ -60,6 +62,8 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   // Update pool liquidity
   pool.liquidity = pool.liquidity.plus(event.params.liquidity)
   pool.save()
+
+  createPositionSnapshot(position as Position, event)
 
   log.info('Increased liquidity for position {}: +{} (deposited: {} token0, {} token1)', [
     positionId,
@@ -120,6 +124,7 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   // Update pool liquidity
   pool.liquidity = pool.liquidity.minus(event.params.liquidity)
   pool.save()
+  createPositionSnapshot(position as Position, event)
 
   log.info('Decreased liquidity for position {}: -{} (withdrawn: {} token0, {} token1)', [
     positionId,
@@ -174,6 +179,7 @@ export function handleTransfer(event: Transfer): void {
     if (position != null) {
       position.owner = event.params.to
       position.save()
+      createPositionSnapshot(position as Position, event)
 
       log.info('Minted new position {} to {}', [positionId, event.params.to.toHexString()])
     } else {
@@ -203,6 +209,7 @@ export function handleTransfer(event: Transfer): void {
     position.owner = event.params.to
     position.liquidity = BigInt.fromI32(0)
     position.save()
+    createPositionSnapshot(position as Position, event)
 
     log.info('Burned position {}', [positionId])
     return
@@ -227,6 +234,7 @@ export function handleTransfer(event: Transfer): void {
   // Update owner
   position.owner = event.params.to
   position.save()
+  createPositionSnapshot(position as Position, event)
 
   log.info('Transferred position {} from {} to {}', [
     positionId,
