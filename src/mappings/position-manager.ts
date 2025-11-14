@@ -4,7 +4,7 @@ import {
   Collect,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, Tick, Transaction } from '../types/schema'
+import { Position, Tick, Transaction, Pool } from '../types/schema'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { getOrCreatePool } from '../utils/pool-helper'
 import { NonfungiblePositionManager } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
@@ -16,6 +16,7 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
 
   if (position == null) {
     // Position doesn't exist yet, create it
+    // Note: loadOrCreatePosition already calls getOrCreatePool internally
     position = loadOrCreatePosition(event.params.tokenId, event.address, event)
 
     if (position == null) {
@@ -24,11 +25,17 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
     }
   }
 
-  // Ensure pool exists
-  let pool = getOrCreatePool(Address.fromString(position.pool))
+  // Pool must exist at this point (either loaded with position or created in loadOrCreatePosition)
+  // But we still do a safety check in case of data inconsistency
+  let pool = Pool.load(position.pool)
   if (pool == null) {
-    log.error('Failed to create pool for position {}', [positionId])
-    return
+    log.error('Pool {} not found for position {}. This should not happen!', [position.pool, positionId])
+    // Try to recover by creating the pool
+    pool = getOrCreatePool(Address.fromString(position.pool))
+    if (pool == null) {
+      log.error('Failed to recover pool for position {}', [positionId])
+      return
+    }
   }
 
   // Update position liquidity
@@ -54,11 +61,16 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
     return
   }
 
-  // Ensure pool exists
-  let pool = getOrCreatePool(Address.fromString(position.pool))
+  // Load pool (should exist if position exists)
+  let pool = Pool.load(position.pool)
   if (pool == null) {
-    log.error('Failed to create pool for position {}', [positionId])
-    return
+    log.error('Pool {} not found for position {}. This should not happen!', [position.pool, positionId])
+    // Try to recover by creating the pool
+    pool = getOrCreatePool(Address.fromString(position.pool))
+    if (pool == null) {
+      log.error('Failed to recover pool for position {}', [positionId])
+      return
+    }
   }
 
   // Update position liquidity
