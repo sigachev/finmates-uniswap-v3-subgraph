@@ -74,8 +74,17 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   let position = Position.load(positionId)
 
   if (position == null) {
-    log.error('Position {} does not exist', [positionId])
-    return
+    log.warning('Position {} does not exist for DecreaseLiquidity event, attempting to create it', [positionId])
+
+    // Try to create the position by fetching from contract
+    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+
+    if (position == null) {
+      log.error('Failed to create position {} for DecreaseLiquidity event', [positionId])
+      return
+    }
+
+    log.info('Successfully recovered position {} for DecreaseLiquidity event', [positionId])
   }
 
   // Load pool (should exist if position exists)
@@ -125,8 +134,17 @@ export function handleCollect(event: Collect): void {
   let position = Position.load(positionId)
 
   if (position == null) {
-    log.warning('Position {} does not exist for Collect event', [positionId])
-    return
+    log.warning('Position {} does not exist for Collect event, attempting to create it', [positionId])
+
+    // Try to create the position by fetching from contract
+    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+
+    if (position == null) {
+      log.error('Failed to create position {} for Collect event', [positionId])
+      return
+    }
+
+    log.info('Successfully recovered position {} for Collect event', [positionId])
   }
 
   // Update collected fees
@@ -167,29 +185,54 @@ export function handleTransfer(event: Transfer): void {
   // Check if this is a burn (to zero address)
   if (event.params.to.toHexString() == '0x0000000000000000000000000000000000000000') {
     let position = Position.load(positionId)
-    if (position != null) {
-      // Mark position as burned
-      position.owner = event.params.to
-      position.liquidity = BigInt.fromI32(0)
-      position.save()
+    if (position == null) {
+      log.warning('Position {} does not exist for Burn event, attempting to create it', [positionId])
 
-      log.info('Burned position {}', [positionId])
+      // Try to create the position by fetching from contract
+      position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+
+      if (position == null) {
+        log.error('Failed to create position {} for Burn event', [positionId])
+        return
+      }
+
+      log.info('Successfully recovered position {} for Burn event', [positionId])
     }
+
+    // Mark position as burned
+    position.owner = event.params.to
+    position.liquidity = BigInt.fromI32(0)
+    position.save()
+
+    log.info('Burned position {}', [positionId])
     return
   }
 
   // Regular transfer
   let position = Position.load(positionId)
-  if (position != null) {
-    position.owner = event.params.to
-    position.save()
+  if (position == null) {
+    log.warning('Position {} does not exist for Transfer event, attempting to create it', [positionId])
 
-    log.info('Transferred position {} from {} to {}', [
-      positionId,
-      event.params.from.toHexString(),
-      event.params.to.toHexString()
-    ])
+    // Try to create the position by fetching from contract
+    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+
+    if (position == null) {
+      log.error('Failed to create position {} for Transfer event', [positionId])
+      return
+    }
+
+    log.info('Successfully recovered position {} for Transfer event', [positionId])
   }
+
+  // Update owner
+  position.owner = event.params.to
+  position.save()
+
+  log.info('Transferred position {} from {} to {}', [
+    positionId,
+    event.params.from.toHexString(),
+    event.params.to.toHexString()
+  ])
 }
 
 function getOrCreateTick(poolAddress: string, tickIdx: i32): Tick {
