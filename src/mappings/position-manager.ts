@@ -4,9 +4,10 @@ import {
   Collect,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, Tick, Transaction, Pool } from '../types/schema'
+import { Position, Tick, Transaction, Pool, Token } from '../types/schema'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
 import { getOrCreatePool } from '../utils/pool-helper'
+import { convertTokenToDecimal } from '../utils'
 import { NonfungiblePositionManager } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
 import { Factory } from '../types/Factory/Factory'
 
@@ -38,6 +39,20 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
     }
   }
 
+  // Get token decimals for proper conversion
+  let token0 = Token.load(pool.token0)
+  let token1 = Token.load(pool.token1)
+
+  if (token0 != null && token1 != null) {
+    // Convert amounts to decimals using token decimals
+    let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+    let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+    // Track deposited amounts
+    position.depositedToken0 = position.depositedToken0.plus(amount0)
+    position.depositedToken1 = position.depositedToken1.plus(amount1)
+  }
+
   // Update position liquidity
   position.liquidity = position.liquidity.plus(event.params.liquidity)
   position.save()
@@ -46,9 +61,11 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   pool.liquidity = pool.liquidity.plus(event.params.liquidity)
   pool.save()
 
-  log.info('Increased liquidity for position {}: +{}', [
+  log.info('Increased liquidity for position {}: +{} (deposited: {} token0, {} token1)', [
     positionId,
-    event.params.liquidity.toString()
+    event.params.liquidity.toString(),
+    event.params.amount0.toString(),
+    event.params.amount1.toString()
   ])
 }
 
@@ -73,6 +90,20 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
     }
   }
 
+  // Get token decimals for proper conversion
+  let token0 = Token.load(pool.token0)
+  let token1 = Token.load(pool.token1)
+
+  if (token0 != null && token1 != null) {
+    // Convert amounts to decimals using token decimals
+    let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+    let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+    // Track withdrawn amounts
+    position.withdrawnToken0 = position.withdrawnToken0.plus(amount0)
+    position.withdrawnToken1 = position.withdrawnToken1.plus(amount1)
+  }
+
   // Update position liquidity
   position.liquidity = position.liquidity.minus(event.params.liquidity)
   position.save()
@@ -81,9 +112,11 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   pool.liquidity = pool.liquidity.minus(event.params.liquidity)
   pool.save()
 
-  log.info('Decreased liquidity for position {}: -{}', [
+  log.info('Decreased liquidity for position {}: -{} (withdrawn: {} token0, {} token1)', [
     positionId,
-    event.params.liquidity.toString()
+    event.params.liquidity.toString(),
+    event.params.amount0.toString(),
+    event.params.amount1.toString()
   ])
 }
 
@@ -267,7 +300,18 @@ function loadOrCreatePosition(
 
   // Create position entity
   position = new Position(positionId)
-  position.owner = Address.fromI32(0) // Will be set by Transfer event
+
+  // Fetch owner from NFT contract instead of defaulting to zero address
+  let ownerResult = nftContract.try_ownerOf(tokenId)
+  if (!ownerResult.reverted) {
+    position.owner = ownerResult.value
+    log.info('Set position {} owner to {}', [positionId, ownerResult.value.toHexString()])
+  } else {
+    // Fallback to zero address if we can't fetch owner
+    position.owner = Address.fromI32(0)
+    log.warning('Could not fetch owner for position {}, defaulting to zero address', [positionId])
+  }
+
   position.pool = pool.id
   position.token0 = pool.token0
   position.token1 = pool.token1
