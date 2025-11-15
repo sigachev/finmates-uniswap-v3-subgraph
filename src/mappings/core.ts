@@ -60,19 +60,27 @@ function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
     return
   }
 
-  let poolContract = PoolABI.bind(event.address)
-  let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
-  if (tickResult.reverted) {
-    log.warning('tick() call reverted for tick {}', [tick.tickIdx.toString()])
-    return
+  // ONLY use eth_call for recent blocks (> 400M)
+  const SAFE_ETH_CALL_BLOCK = BigInt.fromI32(400000000)
+
+  if (event.block.number.gt(SAFE_ETH_CALL_BLOCK)) {
+    let poolContract = PoolABI.bind(event.address)
+    let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
+    if (!tickResult.reverted) {
+      tick.feeGrowthOutside0X128 = tickResult.value.value2
+      tick.feeGrowthOutside1X128 = tickResult.value.value3
+    } else {
+      log.warning('tick() call reverted for tick {}', [tick.tickIdx.toString()])
+    }
+  } else {
+    // For old blocks: skip eth_call, just save tick without fee growth data
+    log.info('Skipping tick fee growth update for old block {}', [event.block.number.toString()])
   }
 
-  tick.feeGrowthOutside0X128 = tickResult.value.value2
-  tick.feeGrowthOutside1X128 = tickResult.value.value3
   tick.save()
-
   updateTickDayData(tick as Tick, event)
 }
+
 
 function loadTickUpdateFeeVarsAndSave(tickId: i32, event: ethereum.Event): void {
   let poolAddress = event.address.toHexString()
