@@ -44,31 +44,17 @@ import {
 const SAFE_ETH_CALL_BLOCK = BigInt.fromI32(400000000)
 
 // ========================================================================
-// PERFORMANCE OPTIMIZATION: Price Update Thresholds
+// PERFORMANCE OPTIMIZATION: Price Update Throttling
 // ========================================================================
-// Only recalculate token prices if they change by more than this threshold
-const PRICE_UPDATE_THRESHOLD = BigDecimal.fromString('0.005') // 0.5% change
+// Update prices every N blocks instead of every swap to reduce expensive
+// findEthPerToken() calls which loop through all whitelisted pools
+const PRICE_UPDATE_BLOCK_INTERVAL = BigInt.fromI32(10)
 
-// Track last price update block per token to avoid excessive recalculations
-let lastPriceUpdateBlock: Map<string, BigInt> = new Map()
-const PRICE_UPDATE_BLOCK_INTERVAL = BigInt.fromI32(10) // Update prices at most every 10 blocks
-
-// Helper to check if we should update token prices
-function shouldUpdateTokenPrices(token: Token, currentBlock: BigInt): boolean {
-  let tokenKey = token.id
-  let lastUpdate = lastPriceUpdateBlock.get(tokenKey)
-
-  if (lastUpdate === null) {
-    lastPriceUpdateBlock.set(tokenKey, currentBlock)
-    return true
-  }
-
-  if (currentBlock.minus(lastUpdate as BigInt).ge(PRICE_UPDATE_BLOCK_INTERVAL)) {
-    lastPriceUpdateBlock.set(tokenKey, currentBlock)
-    return true
-  }
-
-  return false
+// Simple modulo-based throttling (works in AssemblyScript)
+// Returns true if we should update prices for this block number
+function shouldUpdatePrices(blockNumber: BigInt): boolean {
+  // Update prices every 10 blocks (blocks ending in 0)
+  return blockNumber.mod(PRICE_UPDATE_BLOCK_INTERVAL).equals(ZERO_BI)
 }
 // ========================================================================
 
@@ -529,12 +515,9 @@ export function handleSwap(event: SwapEvent): void {
   // ========================================================================
   // PERFORMANCE OPTIMIZATION: Conditional Price Updates
   // ========================================================================
-  // Only update derivedETH prices if sufficient time has passed
+  // Only update derivedETH prices every 10 blocks (blocks ending in 0)
   // This avoids expensive findEthPerToken() calls on every swap
-  let shouldUpdatePrices = shouldUpdateTokenPrices(token0, event.block.number) ||
-    shouldUpdateTokenPrices(token1, event.block.number)
-
-  if (shouldUpdatePrices) {
+  if (shouldUpdatePrices(event.block.number)) {
     // Update USD pricing
     bundle.ethPriceUSD = getEthPriceInUSD()
     bundle.save()
