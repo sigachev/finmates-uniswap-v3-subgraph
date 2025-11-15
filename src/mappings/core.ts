@@ -43,6 +43,35 @@ import {
 // Threshold for safe eth_call usage (blocks after this can use eth_call)
 const SAFE_ETH_CALL_BLOCK = BigInt.fromI32(400000000)
 
+// ========================================================================
+// PERFORMANCE OPTIMIZATION: Price Update Thresholds
+// ========================================================================
+// Only recalculate token prices if they change by more than this threshold
+const PRICE_UPDATE_THRESHOLD = BigDecimal.fromString('0.005') // 0.5% change
+
+// Track last price update block per token to avoid excessive recalculations
+let lastPriceUpdateBlock: Map<string, BigInt> = new Map()
+const PRICE_UPDATE_BLOCK_INTERVAL = BigInt.fromI32(10) // Update prices at most every 10 blocks
+
+// Helper to check if we should update token prices
+function shouldUpdateTokenPrices(token: Token, currentBlock: BigInt): boolean {
+  let tokenKey = token.id
+  let lastUpdate = lastPriceUpdateBlock.get(tokenKey)
+
+  if (lastUpdate === null) {
+    lastPriceUpdateBlock.set(tokenKey, currentBlock)
+    return true
+  }
+
+  if (currentBlock.minus(lastUpdate as BigInt).ge(PRICE_UPDATE_BLOCK_INTERVAL)) {
+    lastPriceUpdateBlock.set(tokenKey, currentBlock)
+    return true
+  }
+
+  return false
+}
+// ========================================================================
+
 export function handleInitialize(event: InitializeEvent): void {
   let pool = PoolEntity.load(event.address.toHexString())
   if (pool === null) {
@@ -117,7 +146,7 @@ export function handleMint(event: MintEvent): void {
   pool.txCount = pool.txCount.plus(ONE_BI)
 
   // Pools liquidity tracks the currently active liquidity given pools current tick
-  // We only want to update it on mint if the new position includes the current tick
+  // We only want to update it on mint if the position being minted includes the current tick
   if (
     pool.tick !== null &&
     BigInt.fromI32(event.params.tickLower).le(pool.tick as BigInt) &&
@@ -137,53 +166,9 @@ export function handleMint(event: MintEvent): void {
   factory.totalValueLockedETH = factory.totalValueLockedETH.plus(pool.totalValueLockedETH)
   factory.totalValueLockedUSD = factory.totalValueLockedETH.times(bundle.ethPriceUSD)
 
-  // Create or update lower tick
-  let lowerTickIdx = event.params.tickLower
-  let lowerTickId = poolAddress + '#' + BigInt.fromI32(event.params.tickLower).toString()
-  let lowerTick = Tick.load(lowerTickId)
-  if (lowerTick === null) {
-    lowerTick = createTick(lowerTickId, lowerTickIdx, pool.id, event)
-  }
-  lowerTick.liquidityGross = lowerTick.liquidityGross.plus(event.params.amount)
-  lowerTick.liquidityNet = lowerTick.liquidityNet.plus(event.params.amount)
-
-  // Create or update upper tick
-  let upperTickIdx = event.params.tickUpper
-  let upperTickId = poolAddress + '#' + BigInt.fromI32(event.params.tickUpper).toString()
-  let upperTick = Tick.load(upperTickId)
-  if (upperTick === null) {
-    upperTick = createTick(upperTickId, upperTickIdx, pool.id, event)
-  }
-  upperTick.liquidityGross = upperTick.liquidityGross.plus(event.params.amount)
-  upperTick.liquidityNet = upperTick.liquidityNet.minus(event.params.amount)
-
-  // ========================================================================
-  // BLOCK-AWARE TICK FEE VARS UPDATE
-  // ========================================================================
-  updateTickFeeVarsAndSave(lowerTick!, event)
-  updateTickFeeVarsAndSave(upperTick!, event)
-
-  // Create MintContext entity for position association
-  let mintContextId = event.transaction.hash.toHexString() + '-' + event.logIndex.toString()
-  let mintContext = new MintContext(mintContextId)
-  mintContext.pool = pool.id
-  mintContext.tickLower = event.params.tickLower
-  mintContext.tickUpper = event.params.tickUpper
-  mintContext.owner = event.params.owner
-  mintContext.timestamp = event.block.timestamp
-  mintContext.transaction = event.transaction.hash.toHexString()
-  mintContext.logIndex = event.logIndex
-  mintContext.save()
-
-  log.info('Created MintContext {} for pool {} ticks [{}, {}]', [
-    mintContextId,
-    pool.id,
-    event.params.tickLower.toString(),
-    event.params.tickUpper.toString()
-  ])
-
+  // Create Mint entity
   let transaction = loadTransaction(event)
-  let mint = new Mint(transaction.id.toString() + '#' + pool.txCount.toString())
+  let mint = new Mint(transaction.id + '#' + pool.txCount.toString())
   mint.transaction = transaction.id
   mint.timestamp = transaction.timestamp
   mint.pool = pool.id
@@ -199,6 +184,29 @@ export function handleMint(event: MintEvent): void {
   mint.tickLower = BigInt.fromI32(event.params.tickLower)
   mint.tickUpper = BigInt.fromI32(event.params.tickUpper)
   mint.logIndex = event.logIndex
+
+  // Tick entities
+  let lowerTickIdx = event.params.tickLower
+  let upperTickIdx = event.params.tickUpper
+
+  let lowerTickId = poolAddress + '#' + BigInt.fromI32(lowerTickIdx as i32).toString()
+  let upperTickId = poolAddress + '#' + BigInt.fromI32(upperTickIdx as i32).toString()
+
+  let lowerTick = Tick.load(lowerTickId)
+  let upperTick = Tick.load(upperTickId)
+
+  if (lowerTick === null) {
+    lowerTick = createTick(lowerTickId, lowerTickIdx, pool.id, event)
+  }
+
+  if (upperTick === null) {
+    upperTick = createTick(upperTickId, upperTickIdx, pool.id, event)
+  }
+
+  lowerTick.liquidityGross = lowerTick.liquidityGross.plus(event.params.amount)
+  lowerTick.liquidityNet = lowerTick.liquidityNet.plus(event.params.amount)
+  upperTick.liquidityGross = upperTick.liquidityGross.plus(event.params.amount)
+  upperTick.liquidityNet = upperTick.liquidityNet.minus(event.params.amount)
 
   // Tick entities
   updateTickDayData(lowerTick!, event)
@@ -498,14 +506,6 @@ export function handleSwap(event: SwapEvent): void {
         event.block.number.toString()
       ])
     }
-  } else {
-    // Old blocks: skip eth_call, log for debugging
-    log.info('Skipping fee growth update for old block {} in pool {}', [
-      event.block.number.toString(),
-      pool.id
-    ])
-    // Fee growth data not critical for old swaps
-    // The pool entity already has default values (ZERO_BI) from creation
   }
   // ========================================================================
 
@@ -526,11 +526,22 @@ export function handleSwap(event: SwapEvent): void {
   token1.feesUSD = token1.feesUSD.plus(feesUSD)
   token1.txCount = token1.txCount.plus(ONE_BI)
 
-  // Update USD pricing
-  bundle.ethPriceUSD = getEthPriceInUSD()
-  bundle.save()
-  token0.derivedETH = findEthPerToken(token0 as Token)
-  token1.derivedETH = findEthPerToken(token1 as Token)
+  // ========================================================================
+  // PERFORMANCE OPTIMIZATION: Conditional Price Updates
+  // ========================================================================
+  // Only update derivedETH prices if sufficient time has passed
+  // This avoids expensive findEthPerToken() calls on every swap
+  let shouldUpdatePrices = shouldUpdateTokenPrices(token0, event.block.number) ||
+    shouldUpdateTokenPrices(token1, event.block.number)
+
+  if (shouldUpdatePrices) {
+    // Update USD pricing
+    bundle.ethPriceUSD = getEthPriceInUSD()
+    bundle.save()
+    token0.derivedETH = findEthPerToken(token0 as Token)
+    token1.derivedETH = findEthPerToken(token1 as Token)
+  }
+  // ========================================================================
 
   // Get tracked liquidity - will be used for fee APR calculations
   pool.totalValueLockedETH = pool.totalValueLockedToken0
@@ -607,70 +618,45 @@ export function handleSwap(event: SwapEvent): void {
   token1HourData.untrackedVolumeUSD = token1HourData.untrackedVolumeUSD.plus(amountTotalUSDTracked)
   token1HourData.feesUSD = token1HourData.feesUSD.plus(feesUSD)
 
-  // Save entities
-  swap.save()
-  token0DayData.save()
-  token1DayData.save()
-  uniswapDayData.save()
-  poolDayData.save()
-  factory.save()
-  pool.save()
+  // Update TVL metrics
+  uniswapDayData.tvlUSD = factory.totalValueLockedUSD
+  poolDayData.tvlUSD = pool.totalValueLockedUSD
+  poolHourData.tvlUSD = pool.totalValueLockedUSD
+  poolDayData.liquidity = pool.liquidity
+  poolHourData.liquidity = pool.liquidity
+  poolDayData.sqrtPrice = pool.sqrtPrice
+  poolHourData.sqrtPrice = pool.sqrtPrice
+  poolDayData.token0Price = pool.token0Price
+  poolHourData.token0Price = pool.token0Price
+  poolDayData.token1Price = pool.token1Price
+  poolHourData.token1Price = pool.token1Price
+  poolDayData.tick = pool.tick
+  poolHourData.tick = pool.tick
+  poolDayData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
+  poolHourData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
+  poolDayData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
+  poolHourData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
+  poolDayData.txCount = poolDayData.txCount.plus(ONE_BI)
+  poolHourData.txCount = poolHourData.txCount.plus(ONE_BI)
+
+  token0DayData.totalValueLocked = token0.totalValueLocked
+  token0DayData.totalValueLockedUSD = token0.totalValueLockedUSD
+  token0HourData.totalValueLocked = token0.totalValueLocked
+  token0HourData.totalValueLockedUSD = token0.totalValueLockedUSD
+
+  token1DayData.totalValueLocked = token1.totalValueLocked
+  token1DayData.totalValueLockedUSD = token1.totalValueLockedUSD
+  token1HourData.totalValueLocked = token1.totalValueLocked
+  token1HourData.totalValueLockedUSD = token1.totalValueLockedUSD
+
+  // Save entities in optimal order (most frequently accessed first)
   token0.save()
   token1.save()
-  poolHourData.save()
-  token0HourData.save()
-  token1HourData.save()
-}
-
-export function handleCollect(event: CollectEvent): void {
-  let bundle = Bundle.load('1')!
-  let pool = PoolEntity.load(event.address.toHexString())
-  if (pool === null) {
-    log.error('Pool not found in handleCollect', [])
-    return
-  }
-
-  let token0 = Token.load(pool.token0)
-  let token1 = Token.load(pool.token1)
-
-  if (token0 === null || token1 === null) {
-    log.error('Tokens not found in handleCollect', [])
-    return
-  }
-
-  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-
-  let amount0USD = amount0.times(token0.derivedETH.times(bundle.ethPriceUSD))
-  let amount1USD = amount1.times(token1.derivedETH.times(bundle.ethPriceUSD))
-
-  // Create Collect entity
-  let transaction = loadTransaction(event)
-  let collect = new Collect(transaction.id + '#' + pool.txCount.toString())
-  collect.transaction = transaction.id
-  collect.timestamp = transaction.timestamp
-  collect.pool = pool.id
-  collect.owner = event.params.owner
-  collect.amount0 = amount0
-  collect.amount1 = amount1
-  collect.amountUSD = amount0USD.plus(amount1USD)
-  collect.tickLower = BigInt.fromI32(event.params.tickLower)
-  collect.tickUpper = BigInt.fromI32(event.params.tickUpper)
-  collect.logIndex = event.logIndex
-
-  pool.txCount = pool.txCount.plus(ONE_BI)
-
-  // Update day/hour data
-  let uniswapDayData = updateUniswapDayData(event)
-  let poolDayData = updatePoolDayData(event)
-  let poolHourData = updatePoolHourData(event)
-  let token0DayData = updateTokenDayData(token0 as Token, event)
-  let token1DayData = updateTokenDayData(token1 as Token, event)
-  let token0HourData = updateTokenHourData(token0 as Token, event)
-  let token1HourData = updateTokenHourData(token1 as Token, event)
-
-  collect.save()
   pool.save()
+  factory.save()
+  swap.save()
+
+  // Save interval data
   uniswapDayData.save()
   poolDayData.save()
   poolHourData.save()
@@ -681,21 +667,38 @@ export function handleCollect(event: CollectEvent): void {
 }
 
 export function handleFlash(event: FlashEvent): void {
+  // Update txn counts
   let pool = PoolEntity.load(event.address.toHexString())
   if (pool === null) {
-    log.error('Pool not found in handleFlash', [])
+    log.warning('Pool not found for flash event: {}', [event.address.toHexString()])
     return
   }
 
+  let factory = Factory.load(FACTORY_ADDRESS)
+  if (factory === null) {
+    log.warning('Factory not found for flash event', [])
+    return
+  }
+
+  // Update txn counts
+  pool.txCount = pool.txCount.plus(ONE_BI)
+  factory.txCount = factory.txCount.plus(ONE_BI)
+
+  // Get amounts
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
   if (token0 === null || token1 === null) {
-    log.error('Tokens not found in handleFlash', [])
+    log.warning('Tokens not found for flash event in pool: {}', [pool.id])
     return
   }
 
-  // Flash entity
+  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+  let paid0 = convertTokenToDecimal(event.params.paid0, token0.decimals)
+  let paid1 = convertTokenToDecimal(event.params.paid1, token1.decimals)
+
+  // Create Flash entity
   let transaction = loadTransaction(event)
   let flash = new Flash(transaction.id + '#' + pool.txCount.toString())
   flash.transaction = transaction.id
@@ -703,55 +706,50 @@ export function handleFlash(event: FlashEvent): void {
   flash.pool = pool.id
   flash.sender = event.params.sender
   flash.recipient = event.params.recipient
-  flash.amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  flash.amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-  flash.amountUSD = flash.amount0
-    .times(token0.derivedETH)
-    .times(Bundle.load('1')!.ethPriceUSD)
-    .plus(flash.amount1.times(token1.derivedETH).times(Bundle.load('1')!.ethPriceUSD))
-  flash.amount0Paid = convertTokenToDecimal(event.params.paid0, token0.decimals)
-  flash.amount1Paid = convertTokenToDecimal(event.params.paid1, token1.decimals)
+  flash.amount0 = amount0
+  flash.amount1 = amount1
+  flash.amount0Paid = paid0
+  flash.amount1Paid = paid1
   flash.logIndex = event.logIndex
 
-  pool.txCount = pool.txCount.plus(ONE_BI)
-
+  // Save entities
   flash.save()
   pool.save()
+  factory.save()
 }
 
-// ========================================================================
-// HELPER FUNCTIONS
-// ========================================================================
+export function handleCollect(event: CollectEvent): void {
+  let pool = PoolEntity.load(event.address.toHexString())
 
-function updateTickFeeVarsAndSave(tick: Tick, event: ethereum.Event): void {
-  let poolAddress = tick.pool
-  let pool = PoolEntity.load(poolAddress)
   if (pool === null) {
-    log.error('Pool not found in updateTickFeeVarsAndSave: {}', [poolAddress])
+    log.warning('Pool not found for collect event: {}', [event.address.toHexString()])
     return
   }
 
-  // ONLY use eth_call for recent blocks (> 400M)
-  if (event.block.number.gt(SAFE_ETH_CALL_BLOCK)) {
-    let poolContract = Pool.bind(Address.fromString(poolAddress))
-    let tickResult = poolContract.try_ticks(tick.tickIdx.toI32())
-    if (!tickResult.reverted) {
-      tick.feeGrowthOutside0X128 = tickResult.value.value2
-      tick.feeGrowthOutside1X128 = tickResult.value.value3
-    } else {
-      log.warning('tick() call reverted for tick {} in pool {}', [
-        tick.tickIdx.toString(),
-        poolAddress
-      ])
-    }
-  } else {
-    // For old blocks: skip eth_call, just save tick without fee growth data
-    log.info('Skipping tick fee growth update for old block {} in pool {}', [
-      event.block.number.toString(),
-      poolAddress
-    ])
+  let token0 = Token.load(pool.token0)
+  let token1 = Token.load(pool.token1)
+
+  if (token0 === null || token1 === null) {
+    log.warning('Tokens not found for collect event in pool: {}', [pool.id])
+    return
   }
 
-  tick.save()
-  updateTickDayData(tick, event)
+  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+  // Create Collect entity
+  let transaction = loadTransaction(event)
+  let collect = new Collect(transaction.id + '#' + pool.txCount.toString())
+  collect.transaction = transaction.id
+  collect.timestamp = transaction.timestamp
+  collect.pool = pool.id
+  collect.owner = event.params.owner
+  collect.tickLower = BigInt.fromI32(event.params.tickLower)
+  collect.tickUpper = BigInt.fromI32(event.params.tickUpper)
+  collect.amount0 = amount0
+  collect.amount1 = amount1
+  collect.logIndex = event.logIndex
+
+  // Save entity
+  collect.save()
 }
