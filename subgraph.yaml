@@ -12,8 +12,7 @@ dataSources:
     source:
       address: '0x1F98431c8aD98523631AE4a59f267346ea31F984'
       abi: Factory
-      # Start from the actual deployment block of Uniswap V3 on Arbitrum
-      startBlock: 300000000
+      startBlock: 165  # ← CHANGED: Uniswap V3 deployment on Arbitrum
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -39,11 +38,10 @@ dataSources:
   - kind: ethereum/contract
     name: NonfungiblePositionManager
     network: arbitrum-one
-    source: 
+    source:
       address: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
       abi: NonfungiblePositionManager
-      # Start from the same block as Factory
-      startBlock: 300000000
+      startBlock: 165  # ← CHANGED: Same as Factory
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7

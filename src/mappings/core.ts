@@ -1,4 +1,4 @@
-import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token, Collect, Flash } from '../types/schema'
+import { Bundle, Burn, Factory, Mint, Pool, Swap, Tick, Token, Collect, Flash, MintContext } from '../types/schema'
 import { Pool as PoolABI } from '../types/Factory/Pool'
 import { BigDecimal, BigInt, ethereum, log } from '@graphprotocol/graph-ts'
 import {
@@ -126,6 +126,26 @@ export function handleMint(event: MintEvent): void {
     log.error('Factory not found in handleMint', [])
     return
   }
+
+  // Create MintContext for position-pool association
+  let contextId = event.transaction.hash.toHexString() + '-' + event.logIndex.toString()
+  let mintContext = new MintContext(contextId)
+  mintContext.pool = poolAddress
+  mintContext.tickLower = event.params.tickLower
+  mintContext.tickUpper = event.params.tickUpper
+  mintContext.owner = event.params.owner
+  mintContext.timestamp = event.block.timestamp
+  mintContext.transaction = event.transaction.hash.toHexString()
+  mintContext.logIndex = event.logIndex
+  mintContext.save()
+
+  log.info('Created MintContext {} for pool {} ticks [{}, {}]', [
+    contextId,
+    poolAddress,
+    event.params.tickLower.toString(),
+    event.params.tickUpper.toString()
+  ])
+  // ============================================================================
 
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)

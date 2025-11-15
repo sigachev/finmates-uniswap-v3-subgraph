@@ -435,6 +435,38 @@ type Flash @entity(immutable: true) {
   logIndex: BigInt
 }
 
+
+# ============================================================================
+# MintContext - Links Pool Mint events with NFT Position IncreaseLiquidity
+# This enables event-only position creation without eth_call operations
+# ============================================================================
+type MintContext @entity(immutable: true) {
+  # Unique ID: transaction hash + "-" + log index
+  id: ID!
+
+  # Pool address that emitted the Mint event
+  pool: String!
+
+  # Lower tick of the position
+  tickLower: Int!
+
+  # Upper tick of the position
+  tickUpper: Int!
+
+  # Owner address from Mint event
+  owner: Bytes!
+
+  # Timestamp of the Mint event
+  timestamp: BigInt!
+
+  # Transaction hash
+  transaction: String!
+
+  # Log index within transaction
+  logIndex: BigInt!
+}
+
+
 # Data accumulated and condensed into day stats for all of Uniswap
 type UniswapDayData @entity(immutable: false) {
   # timestamp rounded to current day by dividing by 86400

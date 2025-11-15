@@ -4,53 +4,273 @@ import {
   Collect,
   Transfer
 } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Position, Tick, Transaction, Pool, Token } from '../types/schema'
+import { Position, Tick, Transaction, Pool, Token, MintContext } from '../types/schema'
 import { Address, BigInt, BigDecimal, ethereum, log } from '@graphprotocol/graph-ts'
-import { getOrCreatePool } from '../utils/pool-helper'
 import { convertTokenToDecimal } from '../utils'
-import { NonfungiblePositionManager } from '../types/NonfungiblePositionManager/NonfungiblePositionManager'
-import { Factory } from '../types/Factory/Factory'
 import { createPositionSnapshot } from '../utils/position-snapshot'
+import { ZERO_BD, ZERO_BI } from '../utils/constants'
 
+// ============================================================================
+// EVENT-ONLY POSITION MANAGEMENT - NO eth_call OPERATIONS
+// ============================================================================
+// This implementation builds position state entirely from events:
+// 1. Transfer (from 0x0) → Creates minimal Position with owner
+// 2. Mint (in Pool) → Creates MintContext with pool/tick info
+// 3. IncreaseLiquidity (NFT) → Uses MintContext to associate Position with Pool
+//
+// NO eth_call to positions() method needed!
+// Works for ALL blocks, including very old ones!
+// ============================================================================
 
+/**
+ * Helper: Get or create Transaction entity
+ */
+function getOrCreateTransaction(event: ethereum.Event): Transaction {
+  let transaction = Transaction.load(event.transaction.hash.toHexString())
+  if (transaction == null) {
+    transaction = new Transaction(event.transaction.hash.toHexString())
+    transaction.blockNumber = event.block.number
+    transaction.timestamp = event.block.timestamp
+    transaction.gasUsed = event.receipt ? event.receipt!.gasUsed : ZERO_BI
+    transaction.gasPrice = event.transaction.gasPrice
+    transaction.save()
+  }
+  return transaction as Transaction
+}
+
+/**
+ * Helper: Get or create Tick entity
+ */
+function getOrCreateTick(poolAddress: string, tickIdx: i32): Tick {
+  let tickId = poolAddress + '#' + tickIdx.toString()
+  let tick = Tick.load(tickId)
+
+  if (tick == null) {
+    tick = new Tick(tickId)
+    tick.poolAddress = poolAddress
+    tick.tickIdx = BigInt.fromI32(tickIdx)
+    tick.pool = poolAddress
+    tick.liquidityGross = ZERO_BI
+    tick.liquidityNet = ZERO_BI
+    tick.price0 = ZERO_BD
+    tick.price1 = ZERO_BD
+    tick.volumeToken0 = ZERO_BD
+    tick.volumeToken1 = ZERO_BD
+    tick.volumeUSD = ZERO_BD
+    tick.untrackedVolumeUSD = ZERO_BD
+    tick.feesUSD = ZERO_BD
+    tick.collectedFeesToken0 = ZERO_BD
+    tick.collectedFeesToken1 = ZERO_BD
+    tick.collectedFeesUSD = ZERO_BD
+    tick.createdAtTimestamp = ZERO_BI
+    tick.createdAtBlockNumber = ZERO_BI
+    tick.liquidityProviderCount = ZERO_BI
+    tick.feeGrowthOutside0X128 = ZERO_BI
+    tick.feeGrowthOutside1X128 = ZERO_BI
+    tick.save()
+  }
+
+  return tick as Tick
+}
+
+/**
+ * Create minimal Position entity from Transfer event
+ * Full details populated later by IncreaseLiquidity event
+ */
+function createMinimalPosition(
+  tokenId: BigInt,
+  owner: Address,
+  event: ethereum.Event
+): Position {
+  let positionId = tokenId.toString()
+  let position = new Position(positionId)
+
+  position.owner = owner
+  position.liquidity = ZERO_BI
+  position.depositedToken0 = ZERO_BD
+  position.depositedToken1 = ZERO_BD
+  position.withdrawnToken0 = ZERO_BD
+  position.withdrawnToken1 = ZERO_BD
+  position.collectedToken0 = ZERO_BD
+  position.collectedToken1 = ZERO_BD
+  position.collectedFeesToken0 = ZERO_BD
+  position.collectedFeesToken1 = ZERO_BD
+  position.feeGrowthInside0LastX128 = ZERO_BI
+  position.feeGrowthInside1LastX128 = ZERO_BI
+
+  // These will be populated by IncreaseLiquidity event using MintContext
+  position.pool = ''
+  position.token0 = ''
+  position.token1 = ''
+  position.tickLower = ''
+  position.tickUpper = ''
+
+  let transaction = getOrCreateTransaction(event)
+  position.transaction = transaction.id
+
+  position.save()
+
+  log.info('Created minimal position {} for owner {} (awaiting pool association)', [
+    positionId,
+    owner.toHexString()
+  ])
+
+  return position as Position
+}
+
+/**
+ * Find MintContext from earlier in the same transaction
+ * Searches backwards from current log index to find pool context
+ */
+function findMintContextForPosition(
+  txHash: string,
+  logIndex: BigInt
+): MintContext | null {
+  let maxLogIndex = logIndex.toI32()
+
+  // Search up to 100 logs before (generous range for complex transactions)
+  let searchStart = maxLogIndex - 100
+  if (searchStart < 0) {
+    searchStart = 0
+  }
+
+  // Search backwards from current log index
+  for (let i = maxLogIndex - 1; i >= searchStart; i--) {
+    let contextId = txHash + '-' + i.toString()
+    let mintContext = MintContext.load(contextId)
+
+    if (mintContext != null) {
+      log.info('Found MintContext {} at log {} for IncreaseLiquidity at log {}', [
+        contextId,
+        i.toString(),
+        logIndex.toString()
+      ])
+      return mintContext as MintContext
+    }
+  }
+
+  log.warning('No MintContext found in tx {} before log index {}', [
+    txHash,
+    logIndex.toString()
+  ])
+  return null
+}
+
+/**
+ * Associate position with pool using MintContext
+ * Returns true if successful, false if MintContext not found
+ */
+function associatePositionWithPool(
+  position: Position,
+  txHash: string,
+  logIndex: BigInt
+): boolean {
+  // Skip if position already has a pool
+  if (position.pool != '' && position.pool != null) {
+    return true
+  }
+
+  // Find MintContext from earlier in transaction
+  let mintContext = findMintContextForPosition(txHash, logIndex)
+
+  if (mintContext == null) {
+    return false
+  }
+
+  // Load pool to validate it exists
+  let pool = Pool.load(mintContext.pool)
+  if (pool == null) {
+    log.error('MintContext references non-existent pool {}', [mintContext.pool])
+    return false
+  }
+
+  // Associate position with pool
+  position.pool = pool.id
+  position.token0 = pool.token0
+  position.token1 = pool.token1
+
+  // Create or get tick entities
+  let tickLowerId = pool.id + '#' + mintContext.tickLower.toString()
+  let tickUpperId = pool.id + '#' + mintContext.tickUpper.toString()
+
+  getOrCreateTick(pool.id, mintContext.tickLower)
+  getOrCreateTick(pool.id, mintContext.tickUpper)
+
+  position.tickLower = tickLowerId
+  position.tickUpper = tickUpperId
+
+  position.save()
+
+  log.info('Associated position {} with pool {} ticks=[{}, {}]', [
+    position.id,
+    pool.id,
+    mintContext.tickLower.toString(),
+    mintContext.tickUpper.toString()
+  ])
+
+  return true
+}
+
+/**
+ * HANDLE INCREASELIQUIDITY
+ * Uses MintContext to associate position with pool - NO eth_call!
+ */
 export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   let positionId = event.params.tokenId.toString()
   let position = Position.load(positionId)
 
   if (position == null) {
-    // Position doesn't exist yet, create it
-    // Note: loadOrCreatePosition already calls getOrCreatePool internally
-    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+    // Position doesn't exist - create minimal version
+    position = new Position(positionId)
+    position.owner = Address.fromI32(0) // Placeholder, updated by Transfer
+    position.liquidity = ZERO_BI
+    position.depositedToken0 = ZERO_BD
+    position.depositedToken1 = ZERO_BD
+    position.withdrawnToken0 = ZERO_BD
+    position.withdrawnToken1 = ZERO_BD
+    position.collectedToken0 = ZERO_BD
+    position.collectedToken1 = ZERO_BD
+    position.collectedFeesToken0 = ZERO_BD
+    position.collectedFeesToken1 = ZERO_BD
+    position.feeGrowthInside0LastX128 = ZERO_BI
+    position.feeGrowthInside1LastX128 = ZERO_BI
+    position.pool = ''
+    position.token0 = ''
+    position.token1 = ''
+    position.tickLower = ''
+    position.tickUpper = ''
 
-    if (position == null) {
-      log.error('Failed to create position {}', [positionId])
-      return
-    }
+    let transaction = getOrCreateTransaction(event)
+    position.transaction = transaction.id
+
+    log.info('Created position {} from IncreaseLiquidity event', [positionId])
   }
 
-  // Pool must exist at this point (either loaded with position or created in loadOrCreatePosition)
-  // But we still do a safety check in case of data inconsistency
+  // Try to associate with pool using MintContext
+  let txHash = event.transaction.hash.toHexString()
+  let associated = associatePositionWithPool(position, txHash, event.logIndex)
+
+  if (!associated) {
+    log.warning('Could not associate position {} with pool (no MintContext found)', [positionId])
+    position.save()
+    return
+  }
+
+  // Position now associated with pool - update liquidity amounts
   let pool = Pool.load(position.pool)
   if (pool == null) {
-    log.error('Pool {} not found for position {}. This should not happen!', [position.pool, positionId])
-    // Try to recover by creating the pool
-    pool = getOrCreatePool(Address.fromString(position.pool))
-    if (pool == null) {
-      log.error('Failed to recover pool for position {}', [positionId])
-      return
-    }
+    log.error('Pool {} not found for position {}', [position.pool, positionId])
+    return
   }
 
-  // Get token decimals for proper conversion
+  // Get token decimals for conversion
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
   if (token0 != null && token1 != null) {
-    // Convert amounts to decimals using token decimals
     let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
     let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
 
-    // Track deposited amounts
     position.depositedToken0 = position.depositedToken0.plus(amount0)
     position.depositedToken1 = position.depositedToken1.plus(amount1)
   }
@@ -73,46 +293,38 @@ export function handleIncreaseLiquidity(event: IncreaseLiquidity): void {
   ])
 }
 
+/**
+ * HANDLE DECREASELIQUIDITY
+ * Position must already exist with pool association
+ */
 export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   let positionId = event.params.tokenId.toString()
   let position = Position.load(positionId)
 
   if (position == null) {
-    log.warning('Position {} does not exist for DecreaseLiquidity event, attempting to create it', [positionId])
-
-    // Try to create the position by fetching from contract
-    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
-
-    if (position == null) {
-      log.error('Failed to create position {} for DecreaseLiquidity event', [positionId])
-      return
-    }
-
-    log.info('Successfully recovered position {} for DecreaseLiquidity event', [positionId])
+    log.warning('Position {} does not exist for DecreaseLiquidity', [positionId])
+    return
   }
 
-  // Load pool (should exist if position exists)
+  if (position.pool == '' || position.pool == null) {
+    log.warning('Position {} has no pool association for DecreaseLiquidity', [positionId])
+    return
+  }
+
   let pool = Pool.load(position.pool)
   if (pool == null) {
-    log.error('Pool {} not found for position {}. This should not happen!', [position.pool, positionId])
-    // Try to recover by creating the pool
-    pool = getOrCreatePool(Address.fromString(position.pool))
-    if (pool == null) {
-      log.error('Failed to recover pool for position {}', [positionId])
-      return
-    }
+    log.error('Pool {} not found for position {}', [position.pool, positionId])
+    return
   }
 
-  // Get token decimals for proper conversion
+  // Get token decimals
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
   if (token0 != null && token1 != null) {
-    // Convert amounts to decimals using token decimals
     let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
     let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
 
-    // Track withdrawn amounts
     position.withdrawnToken0 = position.withdrawnToken0.plus(amount0)
     position.withdrawnToken1 = position.withdrawnToken1.plus(amount1)
   }
@@ -124,6 +336,7 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   // Update pool liquidity
   pool.liquidity = pool.liquidity.minus(event.params.liquidity)
   pool.save()
+
   createPositionSnapshot(position as Position, event)
 
   log.info('Decreased liquidity for position {}: -{} (withdrawn: {} token0, {} token1)', [
@@ -134,25 +347,19 @@ export function handleDecreaseLiquidity(event: DecreaseLiquidity): void {
   ])
 }
 
+/**
+ * HANDLE COLLECT
+ * Position fees collected
+ */
 export function handleCollect(event: Collect): void {
   let positionId = event.params.tokenId.toString()
   let position = Position.load(positionId)
 
   if (position == null) {
-    log.warning('Position {} does not exist for Collect event, attempting to create it', [positionId])
-
-    // Try to create the position by fetching from contract
-    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
-
-    if (position == null) {
-      log.error('Failed to create position {} for Collect event', [positionId])
-      return
-    }
-
-    log.info('Successfully recovered position {} for Collect event', [positionId])
+    log.warning('Position {} does not exist for Collect', [positionId])
+    return
   }
 
-  // Update collected fees
   let amount0Decimal = BigDecimal.fromString(event.params.amount0.toString())
   let amount1Decimal = BigDecimal.fromString(event.params.amount1.toString())
 
@@ -169,71 +376,63 @@ export function handleCollect(event: Collect): void {
   ])
 }
 
+/**
+ * HANDLE TRANSFER
+ * Position ownership changes
+ * Special: from 0x0 = mint, to 0x0 = burn
+ */
 export function handleTransfer(event: Transfer): void {
   let positionId = event.params.tokenId.toString()
 
-  // Check if this is a mint (from zero address)
+  // MINT: from zero address
   if (event.params.from.toHexString() == '0x0000000000000000000000000000000000000000') {
-    let position = loadOrCreatePosition(event.params.tokenId, event.address, event)
+    let position = Position.load(positionId)
 
-    if (position != null) {
+    if (position == null) {
+      // Create minimal position - details come from IncreaseLiquidity
+      position = createMinimalPosition(event.params.tokenId, event.params.to, event)
+    } else {
+      // Position exists (from IncreaseLiquidity) - update owner
       position.owner = event.params.to
       position.save()
-      createPositionSnapshot(position as Position, event)
-
-      log.info('Minted new position {} to {}', [positionId, event.params.to.toHexString()])
-    } else {
-      log.error('Failed to create position {} on mint', [positionId])
     }
+
+    createPositionSnapshot(position as Position, event)
+
+    log.info('Minted position {} to {}', [positionId, event.params.to.toHexString()])
     return
   }
 
-  // Check if this is a burn (to zero address)
+  // BURN: to zero address
   if (event.params.to.toHexString() == '0x0000000000000000000000000000000000000000') {
     let position = Position.load(positionId)
+
     if (position == null) {
-      log.warning('Position {} does not exist for Burn event, attempting to create it', [positionId])
-
-      // Try to create the position by fetching from contract
-      position = loadOrCreatePosition(event.params.tokenId, event.address, event)
-
-      if (position == null) {
-        log.error('Failed to create position {} for Burn event', [positionId])
-        return
-      }
-
-      log.info('Successfully recovered position {} for Burn event', [positionId])
+      log.warning('Position {} does not exist for burn', [positionId])
+      return
     }
 
-    // Mark position as burned
     position.owner = event.params.to
-    position.liquidity = BigInt.fromI32(0)
+    position.liquidity = ZERO_BI
     position.save()
+
     createPositionSnapshot(position as Position, event)
 
     log.info('Burned position {}', [positionId])
     return
   }
 
-  // Regular transfer
+  // REGULAR TRANSFER
   let position = Position.load(positionId)
+
   if (position == null) {
-    log.warning('Position {} does not exist for Transfer event, attempting to create it', [positionId])
-
-    // Try to create the position by fetching from contract
-    position = loadOrCreatePosition(event.params.tokenId, event.address, event)
-
-    if (position == null) {
-      log.error('Failed to create position {} for Transfer event', [positionId])
-      return
-    }
-
-    log.info('Successfully recovered position {} for Transfer event', [positionId])
+    log.warning('Position {} does not exist for transfer', [positionId])
+    return
   }
 
-  // Update owner
   position.owner = event.params.to
   position.save()
+
   createPositionSnapshot(position as Position, event)
 
   log.info('Transferred position {} from {} to {}', [
@@ -241,152 +440,4 @@ export function handleTransfer(event: Transfer): void {
     event.params.from.toHexString(),
     event.params.to.toHexString()
   ])
-}
-
-function getOrCreateTick(poolAddress: string, tickIdx: i32): Tick {
-  let tickId = poolAddress + '#' + tickIdx.toString()
-  let tick = Tick.load(tickId)
-
-  if (tick == null) {
-    tick = new Tick(tickId)
-    tick.poolAddress = poolAddress
-    tick.tickIdx = BigInt.fromI32(tickIdx)
-    tick.pool = poolAddress
-    tick.liquidityGross = BigInt.fromI32(0)
-    tick.liquidityNet = BigInt.fromI32(0)
-    tick.price0 = BigDecimal.fromString('0')
-    tick.price1 = BigDecimal.fromString('0')
-    tick.volumeToken0 = BigDecimal.fromString('0')
-    tick.volumeToken1 = BigDecimal.fromString('0')
-    tick.volumeUSD = BigDecimal.fromString('0')
-    tick.untrackedVolumeUSD = BigDecimal.fromString('0')
-    tick.feesUSD = BigDecimal.fromString('0')
-    tick.collectedFeesToken0 = BigDecimal.fromString('0')
-    tick.collectedFeesToken1 = BigDecimal.fromString('0')
-    tick.collectedFeesUSD = BigDecimal.fromString('0')
-    tick.createdAtTimestamp = BigInt.fromI32(0)
-    tick.createdAtBlockNumber = BigInt.fromI32(0)
-    tick.liquidityProviderCount = BigInt.fromI32(0)
-    tick.feeGrowthOutside0X128 = BigInt.fromI32(0)
-    tick.feeGrowthOutside1X128 = BigInt.fromI32(0)
-    tick.save()
-  }
-
-  return tick as Tick
-}
-
-function loadOrCreatePosition(
-  tokenId: BigInt,
-  nftManagerAddress: Address,
-  event: ethereum.Event
-): Position | null {
-  let positionId = tokenId.toString()
-  let position = Position.load(positionId)
-
-  if (position != null) {
-    return position
-  }
-
-  // Fetch position data from contract
-  let nftContract = NonfungiblePositionManager.bind(nftManagerAddress)
-  let positionResult = nftContract.try_positions(tokenId)
-
-  if (positionResult.reverted) {
-    log.error('Failed to fetch position {} from contract', [positionId])
-    return null
-  }
-
-  let positionData = positionResult.value
-
-  // Get pool address from Factory
-  let factoryResult = nftContract.try_factory()
-  if (factoryResult.reverted) {
-    log.error('Failed to fetch factory address', [])
-    return null
-  }
-
-  // Get token addresses and fee from position data
-  // positions() returns: (nonce, operator, token0, token1, fee, tickLower, tickUpper, liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128, tokensOwed0, tokensOwed1)
-  let token0 = positionData.value2 as Address  // token0
-  let token1 = positionData.value3 as Address  // token1
-  let fee = positionData.value4 as i32         // fee
-
-  // Get pool address from Factory contract
-  let factoryContract = Factory.bind(factoryResult.value)
-  let poolAddressResult = factoryContract.try_getPool(token0, token1, fee)
-
-  if (poolAddressResult.reverted) {
-    log.error('Failed to fetch pool address for position {}', [positionId])
-    return null
-  }
-
-  let poolAddress = poolAddressResult.value
-
-  // Ensure pool exists (auto-create if needed)
-  let pool = getOrCreatePool(poolAddress)
-  if (pool == null) {
-    log.error('Failed to create pool {} for position {}', [
-      poolAddress.toHexString(),
-      positionId
-    ])
-    return null
-  }
-
-  // Get or create transaction
-  let transaction = Transaction.load(event.transaction.hash.toHexString())
-  if (transaction == null) {
-    transaction = new Transaction(event.transaction.hash.toHexString())
-    transaction.blockNumber = event.block.number
-    transaction.timestamp = event.block.timestamp
-    transaction.gasUsed = event.receipt ? event.receipt!.gasUsed : BigInt.fromI32(0)
-    transaction.gasPrice = event.transaction.gasPrice
-    transaction.save()
-  }
-
-  // Create tick entities for lower and upper
-  let tickLowerIdx = positionData.value5 as i32  // tickLower
-  let tickUpperIdx = positionData.value6 as i32  // tickUpper
-  let tickLower = getOrCreateTick(pool.id, tickLowerIdx)
-  let tickUpper = getOrCreateTick(pool.id, tickUpperIdx)
-
-  // Create position entity
-  position = new Position(positionId)
-
-  // Fetch owner from NFT contract instead of defaulting to zero address
-  let ownerResult = nftContract.try_ownerOf(tokenId)
-  if (!ownerResult.reverted) {
-    position.owner = ownerResult.value
-    log.info('Set position {} owner to {}', [positionId, ownerResult.value.toHexString()])
-  } else {
-    // Fallback to zero address if we can't fetch owner
-    position.owner = Address.fromI32(0)
-    log.warning('Could not fetch owner for position {}, defaulting to zero address', [positionId])
-  }
-
-  position.pool = pool.id
-  position.token0 = pool.token0
-  position.token1 = pool.token1
-  position.tickLower = tickLower.id
-  position.tickUpper = tickUpper.id
-  position.liquidity = positionData.value7  // liquidity
-  position.feeGrowthInside0LastX128 = positionData.value8   // feeGrowthInside0LastX128
-  position.feeGrowthInside1LastX128 = positionData.value9  // feeGrowthInside1LastX128y
-
-  // Initialize accumulated amounts
-  position.depositedToken0 = BigDecimal.fromString('0')
-  position.depositedToken1 = BigDecimal.fromString('0')
-  position.withdrawnToken0 = BigDecimal.fromString('0')
-  position.withdrawnToken1 = BigDecimal.fromString('0')
-  position.collectedToken0 = BigDecimal.fromString('0')
-  position.collectedToken1 = BigDecimal.fromString('0')
-  position.collectedFeesToken0 = BigDecimal.fromString('0')
-  position.collectedFeesToken1 = BigDecimal.fromString('0')
-
-  position.transaction = transaction.id
-
-  position.save()
-
-  log.info('Created position {} for pool {}', [positionId, pool.id])
-
-  return position
 }

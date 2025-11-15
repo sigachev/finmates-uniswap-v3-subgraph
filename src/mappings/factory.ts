@@ -82,6 +82,11 @@ export function handlePoolCreated(event: PoolCreated): void {
   let token0 = Token.load(event.params.token0.toHexString())
   let token1 = Token.load(event.params.token1.toHexString())
 
+  // ============================================================================
+  // CRITICAL CHANGE: Pass event.block.number to all fetch functions
+  // This enables block-aware eth_call (only for recent blocks)
+  // ============================================================================
+
   // fetch info if null - with safe defaults
   if (token0 === null) {
     token0 = new Token(event.params.token0.toHexString())
@@ -104,20 +109,21 @@ export function handlePoolCreated(event: PoolCreated): void {
     token0.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    let symbol = fetchTokenSymbol(event.params.token0)
+    // CHANGED: Now passing event.block.number
+    let symbol = fetchTokenSymbol(event.params.token0, event.block.number)
     if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
       token0.symbol = symbol
     }
 
-    let name = fetchTokenName(event.params.token0)
+    let name = fetchTokenName(event.params.token0, event.block.number)
     if (name != 'unknown' && name.length > 0 && name.length < 100) {
       token0.name = name
     }
 
-    let totalSupply = fetchTokenTotalSupply(event.params.token0)
+    let totalSupply = fetchTokenTotalSupply(event.params.token0, event.block.number)
     token0.totalSupply = totalSupply
 
-    let decimals = fetchTokenDecimals(event.params.token0)
+    let decimals = fetchTokenDecimals(event.params.token0, event.block.number)
     if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
       token0.decimals = decimals
     }
@@ -146,20 +152,21 @@ export function handlePoolCreated(event: PoolCreated): void {
     token1.whitelistPools = []
 
     // Fetch actual values with defensive programming
-    let symbol = fetchTokenSymbol(event.params.token1)
+    // CHANGED: Now passing event.block.number
+    let symbol = fetchTokenSymbol(event.params.token1, event.block.number)
     if (symbol != 'unknown' && symbol.length > 0 && symbol.length < 50) {
       token1.symbol = symbol
     }
 
-    let name = fetchTokenName(event.params.token1)
+    let name = fetchTokenName(event.params.token1, event.block.number)
     if (name != 'unknown' && name.length > 0 && name.length < 100) {
       token1.name = name
     }
 
-    let totalSupply = fetchTokenTotalSupply(event.params.token1)
+    let totalSupply = fetchTokenTotalSupply(event.params.token1, event.block.number)
     token1.totalSupply = totalSupply
 
-    let decimals = fetchTokenDecimals(event.params.token1)
+    let decimals = fetchTokenDecimals(event.params.token1, event.block.number)
     if (decimals !== null && decimals.gt(ZERO_BI) && decimals.le(BigInt.fromI32(255))) {
       token1.decimals = decimals
     }
