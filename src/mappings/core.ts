@@ -195,8 +195,8 @@ export function handleMint(event: MintEvent): void {
   upperTick.liquidityNet = upperTick.liquidityNet.minus(event.params.amount)
 
   // Tick entities
-  updateTickDayData(lowerTick!, event)
-  updateTickDayData(upperTick!, event)
+  updateTickDayData(lowerTick, event)
+  updateTickDayData(upperTick, event)
 
   // Update day and hour data
   let uniswapDayData = updateUniswapDayData(event)
@@ -238,8 +238,8 @@ export function handleMint(event: MintEvent): void {
   token0HourData.save()
   token1HourData.save()
 
-  lowerTick!.save()
-  upperTick!.save()
+  lowerTick.save()
+  upperTick.save()
 }
 
 export function handleBurn(event: BurnEvent): void {
@@ -650,38 +650,21 @@ export function handleSwap(event: SwapEvent): void {
 }
 
 export function handleFlash(event: FlashEvent): void {
-  // Update txn counts
   let pool = PoolEntity.load(event.address.toHexString())
   if (pool === null) {
-    log.warning('Pool not found for flash event: {}', [event.address.toHexString()])
+    log.error('Pool not found in handleFlash', [])
     return
   }
 
-  let factory = Factory.load(FACTORY_ADDRESS)
-  if (factory === null) {
-    log.warning('Factory not found for flash event', [])
-    return
-  }
-
-  // Update txn counts
-  pool.txCount = pool.txCount.plus(ONE_BI)
-  factory.txCount = factory.txCount.plus(ONE_BI)
-
-  // Get amounts
   let token0 = Token.load(pool.token0)
   let token1 = Token.load(pool.token1)
 
   if (token0 === null || token1 === null) {
-    log.warning('Tokens not found for flash event in pool: {}', [pool.id])
+    log.error('Tokens not found in handleFlash', [])
     return
   }
 
-  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
-  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
-  let paid0 = convertTokenToDecimal(event.params.paid0, token0.decimals)
-  let paid1 = convertTokenToDecimal(event.params.paid1, token1.decimals)
-
-  // Create Flash entity
+  // Flash entity
   let transaction = loadTransaction(event)
   let flash = new Flash(transaction.id + '#' + pool.txCount.toString())
   flash.transaction = transaction.id
@@ -689,16 +672,30 @@ export function handleFlash(event: FlashEvent): void {
   flash.pool = pool.id
   flash.sender = event.params.sender
   flash.recipient = event.params.recipient
-  flash.amount0 = amount0
-  flash.amount1 = amount1
-  flash.amount0Paid = paid0
-  flash.amount1Paid = paid1
+  flash.amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals)
+  flash.amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals)
+
+  // Calculate amountUSD with null safety
+  let bundle = Bundle.load('1')
+  if (bundle !== null && bundle.ethPriceUSD.gt(ZERO_BD)) {
+    flash.amountUSD = flash.amount0
+      .times(token0.derivedETH)
+      .times(bundle.ethPriceUSD)
+      .plus(flash.amount1.times(token1.derivedETH).times(bundle.ethPriceUSD))
+  } else {
+    // Pricing not available, set to zero
+    flash.amountUSD = ZERO_BD
+    log.warning('Bundle pricing not available for Flash at block {}', [event.block.number.toString()])
+  }
+
+  flash.amount0Paid = convertTokenToDecimal(event.params.paid0, token0.decimals)
+  flash.amount1Paid = convertTokenToDecimal(event.params.paid1, token1.decimals)
   flash.logIndex = event.logIndex
 
-  // Save entities
+  pool.txCount = pool.txCount.plus(ONE_BI)
+
   flash.save()
   pool.save()
-  factory.save()
 }
 
 export function handleCollect(event: CollectEvent): void {
